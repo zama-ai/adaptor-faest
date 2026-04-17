@@ -8,8 +8,8 @@ use faest::faest_internal::{
 use faest::signature::rand_core::CryptoRngCore;
 use generic_array::{GenericArray, typenum::Unsigned};
 
-type OWF<P> = <P as FAESTParameters>::OWF; // TODO do we really need this?
-type RO<P> = <<OWF<P> as OWFParameters>::BaseParams as BaseParameters>::RandomOracle;
+type RO<P> =
+    <<<P as FAESTParameters>::OWF as OWFParameters>::BaseParams as BaseParameters>::RandomOracle;
 
 pub(crate) struct Poff<P: FAESTParameters> {
     pub(crate) inner: GenericArray<u8, <<<P::OWF as OWFParameters>::BaseParams as BaseParameters>::VC as VectorCommitment>::LambdaBytesTimes2>,
@@ -112,7 +112,7 @@ pub(crate) fn onizk_p_on<P>(
 {
     let mut mu = GenericArray::<
         u8,
-        <<OWF<P> as OWFParameters>::BaseParams as BaseParameters>::LambdaBytesTimes2,
+        <<P::OWF as OWFParameters>::BaseParams as BaseParameters>::LambdaBytesTimes2,
     >::default();
 
     // note that message is empty
@@ -125,9 +125,8 @@ pub(crate) fn onizk_p_on<P>(
 }
 
 /// ONIZK.V(Y, \pi)
-/// Y:
-/// \pi:
-/// same as faest.verify
+/// Y: public key
+/// \pi: p_off and p_on
 pub(crate) fn onizk_v<P>(
     pk: &ONIZKPublicKey<P::OWF>,
     sigma: &GenericArray<u8, P::SignatureSize>,
@@ -137,7 +136,7 @@ where
 {
     let mut mu = GenericArray::<
         u8,
-        <<OWF<P> as OWFParameters>::BaseParams as BaseParameters>::LambdaBytesTimes2,
+        <<P::OWF as OWFParameters>::BaseParams as BaseParameters>::LambdaBytesTimes2,
     >::default();
 
     // note that message is empty

@@ -10,3 +10,8 @@ generic-array = { version = "1", features = ["alloc"] }
 
 [dev-dependencies]
 rand = { version = "0.8" }
+criterion = "0.5"
+
+[[bench]]
+name = "adaptor"
+harness = false

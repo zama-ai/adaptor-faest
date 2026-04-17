@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use faest::{
     faest_internal::{
         FAESTParameters, OWFParameters, PublicKey, SecretKey, faest_sign, faest_verify,
@@ -11,12 +13,62 @@ use crate::onizk::{
     onizk_v,
 };
 
-struct AdaptorPreSigature<P: FAESTParameters> {
+/// The witness keypair used in `as_adapt` / `as_ext`. Opaque wrapper so
+/// that ONIZK internals are not part of the public API.
+pub struct Witness<O: OWFParameters> {
+    inner: ONIZKSecretKey<O>,
+}
+
+impl<O: OWFParameters> Witness<O> {
+    pub fn random<R: CryptoRngCore>(rng: &mut R) -> Self {
+        Self {
+            inner: onizk_keygen(rng),
+        }
+    }
+
+    /// The instance Y corresponding to this witness.
+    pub fn instance(&self) -> Instance<O> {
+        Instance {
+            inner: self.inner.as_public_key(),
+        }
+    }
+}
+
+impl<O: OWFParameters> Deref for Witness<O> {
+    type Target = SecretKey<O>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+/// The hard instance Y that a pre-signature is bound to.
+pub struct Instance<O: OWFParameters> {
+    inner: ONIZKPublicKey<O>,
+}
+
+fn build_msg_for_signing<O: OWFParameters>(
+    y: &ONIZKPublicKey<O>,
+    p_off: &[u8],
+    m: &[u8],
+) -> Vec<u8> {
+    let y_in = y.owf_input();
+    let y_out = y.owf_output();
+    // TODO we can use O::InputSize * 2
+    let mut msg = Vec::with_capacity(y_in.len() + y_out.len() + p_off.len() + m.len());
+    msg.extend_from_slice(y_in);
+    msg.extend_from_slice(y_out);
+    msg.extend_from_slice(p_off);
+    msg.extend_from_slice(m);
+    msg
+}
+
+pub struct AdaptorPreSigature<P: FAESTParameters> {
     signature: GenericArray<u8, P::SignatureSize>,
     r: GenericArray<u8, <P::OWF as OWFParameters>::LAMBDABYTES>,
 }
 
-struct AdaptorSignature<P: FAESTParameters> {
+pub struct AdaptorSignature<P: FAESTParameters> {
     // The ONIZK instance Y that `p_on` proves knowledge of the witness for.
     public_key: ONIZKPublicKey<P::OWF>,
     signature: GenericArray<u8, P::SignatureSize>,
@@ -24,55 +76,56 @@ struct AdaptorSignature<P: FAESTParameters> {
     p_on: Pon<P>,
 }
 
-struct AdaptorSecretKey<O: OWFParameters> {
-    sk_onizk: ONIZKSecretKey<O>,
+pub struct AdaptorSigningKey<O: OWFParameters> {
+    // sk_onizk: ONIZKSecretKey<O>,
     sk_regular: SecretKey<O>,
 }
 
-impl<O: OWFParameters> AdaptorSecretKey<O> {
-    fn as_public_key(&self) -> AdaptorPublicKey<O> {
-        AdaptorPublicKey {
-            pk_onizk: self.sk_onizk.as_public_key(),
+impl<O: OWFParameters> AdaptorSigningKey<O> {
+    pub fn as_public_key(&self) -> AdaptorVerificationKey<O> {
+        AdaptorVerificationKey {
+            // pk_onizk: self.sk_onizk.as_public_key(),
             pk_regular: self.sk_regular.as_public_key(),
         }
     }
 }
 
-struct AdaptorPublicKey<O: OWFParameters> {
-    pk_onizk: ONIZKPublicKey<O>,
+pub struct AdaptorVerificationKey<O: OWFParameters> {
+    // pk_onizk: ONIZKPublicKey<O>,
     pk_regular: PublicKey<O>,
 }
 
 /// AS.keygen
-/// TODO this is a weird signature
-fn as_keygen<O, R>(mut rng: &mut R) -> AdaptorSecretKey<O>
+pub fn as_keygen<O, R>(rng: &mut R) -> AdaptorSigningKey<O>
 where
     O: OWFParameters,
     R: CryptoRngCore,
 {
-    let sk_regular = O::keygen_with_rng(&mut rng);
-    let sk_onizk = onizk_keygen(&mut rng);
-    AdaptorSecretKey {
-        sk_onizk,
+    let sk_regular = O::keygen_with_rng(rng);
+    // let sk_onizk = onizk_keygen(&mut rng);
+    AdaptorSigningKey {
+        // sk_onizk,
         sk_regular,
     }
 }
 
-fn as_p_sig<P, R>(sk: &AdaptorSecretKey<P::OWF>, m: &[u8], rng: &mut R) -> AdaptorPreSigature<P>
+pub fn as_pre_sign<P, R>(
+    sk: &AdaptorSigningKey<P::OWF>,
+    instance: &Instance<P::OWF>,
+    m: &[u8],
+    rng: &mut R,
+) -> AdaptorPreSigature<P>
 where
     P: FAESTParameters,
     R: CryptoRngCore,
 {
-    // TODO consider pre-allocation the r and signature in this function
+    // TODO consider pre-allocation AdaptorPreSigature<P> { signature, r }
     let mut r = GenericArray::<u8, <P::OWF as OWFParameters>::LAMBDABYTES>::default();
     rng.fill_bytes(&mut r);
-    let p_off = onizk_p_off::<P>(&mut r);
+    let p_off = onizk_p_off::<P>(&r);
 
-    // TODO we need to create Y, which is the public key
     // msg = Y || \pi_off || m
-    let mut msg = vec![0u8; p_off.inner.as_slice().len() + m.len()];
-    msg[0..p_off.inner.len()].copy_from_slice(&p_off.inner);
-    msg[p_off.inner.len()..].copy_from_slice(m);
+    let msg = build_msg_for_signing(&instance.inner, &p_off.inner, m);
 
     let mut signature = GenericArray::<u8, P::SignatureSize>::default();
     // should we use empty rho?
@@ -82,8 +135,9 @@ where
 }
 
 // s: signature
-fn as_p_ver<P>(
-    pk: &AdaptorPublicKey<P::OWF>, // this is Y
+pub fn as_pre_ver<P>(
+    pk: &AdaptorVerificationKey<P::OWF>,
+    instance: &Instance<P::OWF>,
     pre_sig: &AdaptorPreSigature<P>,
     m: &[u8],
 ) -> Result<(), faest::Error>
@@ -96,17 +150,15 @@ where
     let p_off = onizk_p_off::<P>(r);
 
     // msg = Y || \pi_off || m
-    let mut msg = vec![0u8; p_off.inner.as_slice().len() + m.len()];
-    msg[0..p_off.inner.len()].copy_from_slice(&p_off.inner);
-    msg[p_off.inner.len()..].copy_from_slice(m);
+    let msg = build_msg_for_signing(&instance.inner, &p_off.inner, m);
 
     faest_verify::<P>(&msg, &pk.pk_regular, signature)
 }
 
-fn as_adapt<P>(
-    sk: &ONIZKSecretKey<P::OWF>, // y
+pub fn as_adapt<P>(
+    sk: &Witness<P::OWF>, // y
     pre_sig: &AdaptorPreSigature<P>,
-    m: &[u8], // do we need this?
+    _m: &[u8], // TODO do we need this?
 ) -> AdaptorSignature<P>
 where
     P: FAESTParameters,
@@ -119,18 +171,18 @@ where
     let mut p_on = Pon::<P> {
         inner: GenericArray::default(),
     };
-    onizk_p_on(sk, r, &mut p_on);
+    onizk_p_on(&sk.inner, r, &mut p_on);
 
     AdaptorSignature {
-        public_key: sk.as_public_key(),
+        public_key: sk.inner.as_public_key(),
         signature,
         p_off,
         p_on,
     }
 }
 
-fn as_ver<P>(
-    pk: &AdaptorPublicKey<P::OWF>,
+pub fn as_ver<P>(
+    vk: &AdaptorVerificationKey<P::OWF>,
     a_sig: &AdaptorSignature<P>,
     m: &[u8],
 ) -> Result<(), faest::Error>
@@ -141,12 +193,10 @@ where
     let p_on = &a_sig.p_on;
     let signature = &a_sig.signature;
 
-    // reconstruct the mssage
-    let mut msg = vec![0u8; p_off.inner.as_slice().len() + m.len()];
-    msg[0..p_off.inner.len()].copy_from_slice(&p_off.inner);
-    msg[p_off.inner.len()..].copy_from_slice(m);
+    // reconstruct the message: Y || \p_off || m, and verify
+    let msg = build_msg_for_signing(&a_sig.public_key, &p_off.inner, m);
+    faest_verify::<P>(&msg, &vk.pk_regular, signature)?;
 
-    faest_verify::<P>(&msg, &pk.pk_regular, signature)?;
     // p_on proves knowledge of the witness for the instance carried in the
     // adapted signature, not for the signer's pk_onizk.
     onizk_v::<P>(&a_sig.public_key, &p_on.inner)?;
@@ -154,7 +204,7 @@ where
     Ok(())
 }
 
-fn as_sign<P, R>(sk: &AdaptorSecretKey<P::OWF>, m: &[u8], rng: &mut R) -> AdaptorSignature<P>
+pub fn as_sign<P, R>(sk: &AdaptorSigningKey<P::OWF>, m: &[u8], rng: &mut R) -> AdaptorSignature<P>
 where
     P: FAESTParameters,
     R: CryptoRngCore,
@@ -173,22 +223,22 @@ where
     onizk_p_on(&y, &r, &mut p_on);
 
     // sign Y || p_off || m
-    let mut msg = vec![0u8; p_off.inner.as_slice().len() + m.len()];
-    msg[0..p_off.inner.len()].copy_from_slice(&p_off.inner);
-    msg[p_off.inner.len()..].copy_from_slice(m);
+    let y_pk = y.as_public_key();
+    let msg = build_msg_for_signing(&y_pk, &p_off.inner, m);
 
     let mut signature = GenericArray::<u8, P::SignatureSize>::default();
     faest_sign::<P>(&msg, &sk.sk_regular, &[], &mut signature);
 
+    // TODO consider pre-allocating AdaptorSignature
     AdaptorSignature {
-        public_key: y.as_public_key(),
+        public_key: y_pk,
         signature,
         p_off,
         p_on,
     }
 }
 
-fn as_ext<P>(pre_sig: &AdaptorPreSigature<P>, a_sig: &AdaptorSignature<P>) -> Vec<u8>
+pub fn as_ext<P>(pre_sig: &AdaptorPreSigature<P>, a_sig: &AdaptorSignature<P>) -> Vec<u8>
 where
     P: FAESTParameters,
 {
@@ -202,39 +252,48 @@ mod test {
     use super::*;
 
     #[test]
-    fn as_p_sig_and_verify() {
+    fn as_pre_sig_and_verify() {
         let mut rng = rand::thread_rng();
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let pk = sk.as_public_key();
+        let witness = Witness::<<FAEST128fParameters as FAESTParameters>::OWF>::random(&mut rng);
+        let instance = witness.instance();
 
-        let msg = b"test message";
-        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+        let msg = b"four legs good, two legs better";
+        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng);
 
-        as_p_ver::<FAEST128fParameters>(&pk, &pre_sig, msg).unwrap();
+        as_pre_ver::<FAEST128fParameters>(&pk, &instance, &pre_sig, msg).unwrap();
     }
 
     #[test]
-    fn as_p_sig_and_verify_wrong_key() {
+    fn as_pre_sig_and_verify_wrong_key() {
         let mut rng = rand::thread_rng();
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let witness = Witness::<<FAEST128fParameters as FAESTParameters>::OWF>::random(&mut rng);
+        let instance = witness.instance();
 
-        let msg = b"test message";
-        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+        let msg = b"four legs good, two legs better";
+        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng);
 
         let wrong_sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let wrong_pk = wrong_sk.as_public_key();
-        assert!(as_p_ver::<FAEST128fParameters>(&wrong_pk, &pre_sig, msg).is_err());
+        assert!(as_pre_ver::<FAEST128fParameters>(&wrong_pk, &instance, &pre_sig, msg).is_err());
     }
 
     #[test]
-    fn as_p_sig_and_verify_wrong_message() {
+    fn as_pre_sig_and_verify_wrong_message() {
         let mut rng = rand::thread_rng();
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let pk = sk.as_public_key();
+        let witness = Witness::<<FAEST128fParameters as FAESTParameters>::OWF>::random(&mut rng);
+        let instance = witness.instance();
 
-        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, b"correct message", &mut rng);
+        let pre_sig =
+            as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, b"correct message", &mut rng);
 
-        assert!(as_p_ver::<FAEST128fParameters>(&pk, &pre_sig, b"wrong message").is_err());
+        assert!(
+            as_pre_ver::<FAEST128fParameters>(&pk, &instance, &pre_sig, b"wrong message").is_err()
+        );
     }
 
     // Adapted-signature correctness:
@@ -247,10 +306,11 @@ mod test {
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let pk = sk.as_public_key();
 
-        let msg = b"test message";
-        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+        let witness_sk = Witness::<<FAEST128fParameters as FAESTParameters>::OWF>::random(&mut rng);
+        let instance = witness_sk.instance();
 
-        let witness_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let msg = b"four legs good, two legs better";
+        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng);
 
         let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg);
 
@@ -265,9 +325,12 @@ mod test {
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let pk = sk.as_public_key();
 
-        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, b"correct message", &mut rng);
+        let witness_sk = Witness::<<FAEST128fParameters as FAESTParameters>::OWF>::random(&mut rng);
+        let instance = witness_sk.instance();
 
-        let witness_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let pre_sig =
+            as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, b"correct message", &mut rng);
+
         let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, b"correct message");
 
         assert!(as_ver::<FAEST128fParameters>(&pk, &a_sig, b"wrong message").is_err());
@@ -282,7 +345,7 @@ mod test {
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let pk = sk.as_public_key();
 
-        let msg = b"test message";
+        let msg = b"four legs good, two legs better";
         let a_sig = as_sign::<FAEST128fParameters, _>(&sk, msg, &mut rng);
 
         as_ver::<FAEST128fParameters>(&pk, &a_sig, msg).unwrap();
@@ -294,7 +357,7 @@ mod test {
         let mut rng = rand::thread_rng();
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
 
-        let msg = b"test message";
+        let msg = b"four legs good, two legs better";
         let a_sig = as_sign::<FAEST128fParameters, _>(&sk, msg, &mut rng);
 
         let wrong_pk =
@@ -325,10 +388,12 @@ mod test {
         let mut rng = rand::thread_rng();
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
 
-        let msg = b"test message";
-        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+        let witness_sk = Witness::<<FAEST128fParameters as FAESTParameters>::OWF>::random(&mut rng);
+        let instance = witness_sk.instance();
 
-        let witness_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let msg = b"four legs good, two legs better";
+        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng);
+
         let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg);
 
         let extracted = as_ext::<FAEST128fParameters>(&pre_sig, &a_sig);
@@ -347,14 +412,16 @@ mod test {
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let pk = sk.as_public_key();
 
+        let witness_sk = Witness::<<FAEST128fParameters as FAESTParameters>::OWF>::random(&mut rng);
+        let instance = witness_sk.instance();
+
         let msg = b"four legs good, two legs better";
 
         // Pre-signature correctness.
-        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, msg, &mut rng);
-        as_p_ver::<FAEST128fParameters>(&pk, &pre_sig, msg).unwrap();
+        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng);
+        as_pre_ver::<FAEST128fParameters>(&pk, &instance, &pre_sig, msg).unwrap();
 
         // Adapted-signature correctness.
-        let witness_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg);
         as_ver::<FAEST128fParameters>(&pk, &a_sig, msg).unwrap();
 
