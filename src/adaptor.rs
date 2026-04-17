@@ -17,7 +17,8 @@ struct AdaptorPreSigature<P: FAESTParameters> {
 }
 
 struct AdaptorSignature<P: FAESTParameters> {
-    public_key: PublicKey<P::OWF>,
+    // The ONIZK instance Y that `p_on` proves knowledge of the witness for.
+    public_key: ONIZKPublicKey<P::OWF>,
     signature: GenericArray<u8, P::SignatureSize>,
     p_off: Poff<P>,
     p_on: Pon<P>,
@@ -105,7 +106,7 @@ where
 fn as_adapt<P>(
     sk: &ONIZKSecretKey<P::OWF>, // y
     pre_sig: &AdaptorPreSigature<P>,
-    m: &[u8],
+    m: &[u8], // do we need this?
 ) -> AdaptorSignature<P>
 where
     P: FAESTParameters,
@@ -121,7 +122,7 @@ where
     onizk_p_on(sk, r, &mut p_on);
 
     AdaptorSignature {
-        public_key: sk.as_public_key().into(),
+        public_key: sk.as_public_key(),
         signature,
         p_off,
         p_on,
@@ -146,7 +147,9 @@ where
     msg[p_off.inner.len()..].copy_from_slice(m);
 
     faest_verify::<P>(&msg, &pk.pk_regular, signature)?;
-    onizk_v::<P>(&pk.pk_onizk, &p_on.inner)?; // TODO check
+    // p_on proves knowledge of the witness for the instance carried in the
+    // adapted signature, not for the signer's pk_onizk.
+    onizk_v::<P>(&a_sig.public_key, &p_on.inner)?;
 
     Ok(())
 }
@@ -178,7 +181,7 @@ where
     faest_sign::<P>(&msg, &sk.sk_regular, &[], &mut signature);
 
     AdaptorSignature {
-        public_key: y.as_public_key().into(),
+        public_key: y.as_public_key(),
         signature,
         p_off,
         p_on,
@@ -232,5 +235,137 @@ mod test {
         let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, b"correct message", &mut rng);
 
         assert!(as_p_ver::<FAEST128fParameters>(&pk, &pre_sig, b"wrong message").is_err());
+    }
+
+    // Adapted-signature correctness:
+    //   asVer(apk, m, asAdapt(apk, psig, instance, witness, m)) = 1
+    // The (instance, witness) pair is represented by `witness_sk`: the instance
+    // is its ONIZK public key, the witness is the underlying OWF preimage.
+    #[test]
+    fn as_adapted_signature_correctness() {
+        let mut rng = rand::thread_rng();
+        let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let pk = sk.as_public_key();
+
+        let msg = b"test message";
+        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+
+        let witness_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+
+        let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg);
+
+        as_ver::<FAEST128fParameters>(&pk, &a_sig, msg).unwrap();
+    }
+
+    // Negative counterpart: an adapted signature must not verify against a
+    // different message.
+    #[test]
+    fn as_adapted_signature_wrong_message() {
+        let mut rng = rand::thread_rng();
+        let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let pk = sk.as_public_key();
+
+        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, b"correct message", &mut rng);
+
+        let witness_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, b"correct message");
+
+        assert!(as_ver::<FAEST128fParameters>(&pk, &a_sig, b"wrong message").is_err());
+    }
+
+    // Signature correctness:
+    //   asVer(apk, m, asSig(ask, m)) = 1
+    // A signature produced directly by as_sign must verify.
+    #[test]
+    fn as_signature_correctness() {
+        let mut rng = rand::thread_rng();
+        let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let pk = sk.as_public_key();
+
+        let msg = b"test message";
+        let a_sig = as_sign::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+
+        as_ver::<FAEST128fParameters>(&pk, &a_sig, msg).unwrap();
+    }
+
+    // Negative counterpart: verification must fail under a different public key.
+    #[test]
+    fn as_signature_wrong_key() {
+        let mut rng = rand::thread_rng();
+        let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+
+        let msg = b"test message";
+        let a_sig = as_sign::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+
+        let wrong_pk =
+            as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng).as_public_key();
+        assert!(as_ver::<FAEST128fParameters>(&wrong_pk, &a_sig, msg).is_err());
+    }
+
+    // Negative counterpart: verification must fail under a different message.
+    #[test]
+    fn as_signature_wrong_message() {
+        let mut rng = rand::thread_rng();
+        let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let pk = sk.as_public_key();
+
+        let a_sig = as_sign::<FAEST128fParameters, _>(&sk, b"correct message", &mut rng);
+
+        assert!(as_ver::<FAEST128fParameters>(&pk, &a_sig, b"wrong message").is_err());
+    }
+
+    // Extraction correctness:
+    //   R(instance, asExt(apk, psig, asAdapt(apk, m, psig, witness))) = 1
+    // The relation R here is "w is the OWF preimage behind the ONIZK public key
+    // Y". The instance Y is `witness_sk.as_public_key()`, and a valid witness
+    // equals `OWFParameters::witness(&witness_sk)` (same invariant as the
+    // onizk_ewr test in src/onizk.rs).
+    #[test]
+    fn as_extraction_correctness() {
+        let mut rng = rand::thread_rng();
+        let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+
+        let msg = b"test message";
+        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+
+        let witness_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg);
+
+        let extracted = as_ext::<FAEST128fParameters>(&pre_sig, &a_sig);
+
+        let expected =
+            <<FAEST128fParameters as FAESTParameters>::OWF as OWFParameters>::witness(&witness_sk);
+        assert_eq!(extracted.as_slice(), expected.as_slice());
+    }
+
+    // End-to-end: exercise all four correctness properties against one fixed
+    // (ask, instance, witness, m) tuple, matching the universal quantifier in
+    // the correctness definition.
+    #[test]
+    fn as_full_flow() {
+        let mut rng = rand::thread_rng();
+        let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let pk = sk.as_public_key();
+
+        let msg = b"four legs good, two legs better";
+
+        // Pre-signature correctness.
+        let pre_sig = as_p_sig::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+        as_p_ver::<FAEST128fParameters>(&pk, &pre_sig, msg).unwrap();
+
+        // Adapted-signature correctness.
+        let witness_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+        let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg);
+        as_ver::<FAEST128fParameters>(&pk, &a_sig, msg).unwrap();
+
+        // Extraction correctness.
+        let extracted = as_ext::<FAEST128fParameters>(&pre_sig, &a_sig);
+        let expected =
+            <<FAEST128fParameters as FAESTParameters>::OWF as OWFParameters>::witness(&witness_sk);
+        assert_eq!(extracted.as_slice(), expected.as_slice());
+
+        // Signature correctness (independent of pre-sig / adapt path).
+        let direct_sig = as_sign::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+        as_ver::<FAEST128fParameters>(&pk, &direct_sig, msg).unwrap();
     }
 }
