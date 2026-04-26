@@ -67,7 +67,8 @@ fn build_msg_for_signing<O: OWFParameters>(
 
 pub struct AdaptorPreSigature<P: FAESTParameters> {
     signature: GenericArray<u8, P::SignatureSize>,
-    r: GenericArray<u8, <P::OWF as OWFParameters>::LAMBDABYTES>,
+    // FAEST v2 note: v1 named this associated type LAMBDABYTES.
+    r: GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
 }
 
 impl<P: FAESTParameters> AdaptorPreSigature<P> {
@@ -131,13 +132,13 @@ pub fn as_pre_sign<P, R>(
     instance: &Instance<P::OWF>,
     m: &[u8],
     rng: &mut R,
-) -> AdaptorPreSigature<P>
+) -> Result<AdaptorPreSigature<P>, faest::Error>
 where
     P: FAESTParameters,
     R: CryptoRngCore,
 {
     // TODO consider pre-allocation AdaptorPreSigature<P> { signature, r }
-    let mut r = GenericArray::<u8, <P::OWF as OWFParameters>::LAMBDABYTES>::default();
+    let mut r = GenericArray::<u8, <P::OWF as OWFParameters>::LambdaBytes>::default();
     rng.fill_bytes(&mut r);
     let p_off = onizk_p_off::<P>(&r);
 
@@ -146,9 +147,9 @@ where
 
     let mut signature = GenericArray::<u8, P::SignatureSize>::default();
     // should we use empty rho?
-    faest_sign::<P>(&msg, &sk.sk_regular, &[], &mut signature);
+    faest_sign::<P>(&msg, &sk.sk_regular, &[], &mut signature)?;
 
-    AdaptorPreSigature { signature, r }
+    Ok(AdaptorPreSigature { signature, r })
 }
 
 // s: signature
@@ -176,7 +177,7 @@ pub fn as_adapt<P>(
     sk: &Witness<P::OWF>, // y
     pre_sig: &AdaptorPreSigature<P>,
     _m: &[u8], // TODO do we need this?
-) -> AdaptorSignature<P>
+) -> Result<AdaptorSignature<P>, faest::Error>
 where
     P: FAESTParameters,
 {
@@ -188,14 +189,14 @@ where
     let mut p_on = Pon::<P> {
         inner: GenericArray::default(),
     };
-    onizk_p_on(&sk.inner, r, &mut p_on);
+    onizk_p_on(&sk.inner, r, &mut p_on)?;
 
-    AdaptorSignature {
+    Ok(AdaptorSignature {
         public_key: sk.inner.as_public_key(),
         signature,
         p_off,
         p_on,
-    }
+    })
 }
 
 pub fn as_ver<P>(
@@ -221,7 +222,11 @@ where
     Ok(())
 }
 
-pub fn as_sign<P, R>(sk: &AdaptorSigningKey<P::OWF>, m: &[u8], rng: &mut R) -> AdaptorSignature<P>
+pub fn as_sign<P, R>(
+    sk: &AdaptorSigningKey<P::OWF>,
+    m: &[u8],
+    rng: &mut R,
+) -> Result<AdaptorSignature<P>, faest::Error>
 where
     P: FAESTParameters,
     R: CryptoRngCore,
@@ -237,22 +242,22 @@ where
     let mut p_on = Pon::<P> {
         inner: GenericArray::default(),
     };
-    onizk_p_on(&y, &r, &mut p_on);
+    onizk_p_on(&y, &r, &mut p_on)?;
 
     // sign Y || p_off || m
     let y_pk = y.as_public_key();
     let msg = build_msg_for_signing(&y_pk, &p_off.inner, m);
 
     let mut signature = GenericArray::<u8, P::SignatureSize>::default();
-    faest_sign::<P>(&msg, &sk.sk_regular, &[], &mut signature);
+    faest_sign::<P>(&msg, &sk.sk_regular, &[], &mut signature)?;
 
     // TODO consider pre-allocating AdaptorSignature
-    AdaptorSignature {
+    Ok(AdaptorSignature {
         public_key: y_pk,
         signature,
         p_off,
         p_on,
-    }
+    })
 }
 
 pub fn as_ext<P>(pre_sig: &AdaptorPreSigature<P>, a_sig: &AdaptorSignature<P>) -> Vec<u8>
@@ -277,7 +282,7 @@ mod test {
         let instance = witness.instance();
 
         let msg = b"four legs good, two legs better";
-        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng);
+        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng).unwrap();
 
         as_pre_ver::<FAEST128fParameters>(&pk, &instance, &pre_sig, msg).unwrap();
     }
@@ -290,7 +295,7 @@ mod test {
         let instance = witness.instance();
 
         let msg = b"four legs good, two legs better";
-        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng);
+        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng).unwrap();
 
         let wrong_sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let wrong_pk = wrong_sk.as_public_key();
@@ -306,7 +311,8 @@ mod test {
         let instance = witness.instance();
 
         let pre_sig =
-            as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, b"correct message", &mut rng);
+            as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, b"correct message", &mut rng)
+                .unwrap();
 
         assert!(
             as_pre_ver::<FAEST128fParameters>(&pk, &instance, &pre_sig, b"wrong message").is_err()
@@ -327,9 +333,9 @@ mod test {
         let instance = witness_sk.instance();
 
         let msg = b"four legs good, two legs better";
-        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng);
+        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng).unwrap();
 
-        let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg);
+        let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg).unwrap();
 
         as_ver::<FAEST128fParameters>(&pk, &a_sig, msg).unwrap();
     }
@@ -346,9 +352,11 @@ mod test {
         let instance = witness_sk.instance();
 
         let pre_sig =
-            as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, b"correct message", &mut rng);
+            as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, b"correct message", &mut rng)
+                .unwrap();
 
-        let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, b"correct message");
+        let a_sig =
+            as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, b"correct message").unwrap();
 
         assert!(as_ver::<FAEST128fParameters>(&pk, &a_sig, b"wrong message").is_err());
     }
@@ -363,7 +371,7 @@ mod test {
         let pk = sk.as_public_key();
 
         let msg = b"four legs good, two legs better";
-        let a_sig = as_sign::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+        let a_sig = as_sign::<FAEST128fParameters, _>(&sk, msg, &mut rng).unwrap();
 
         as_ver::<FAEST128fParameters>(&pk, &a_sig, msg).unwrap();
     }
@@ -375,7 +383,7 @@ mod test {
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
 
         let msg = b"four legs good, two legs better";
-        let a_sig = as_sign::<FAEST128fParameters, _>(&sk, msg, &mut rng);
+        let a_sig = as_sign::<FAEST128fParameters, _>(&sk, msg, &mut rng).unwrap();
 
         let wrong_pk =
             as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng).as_public_key();
@@ -389,7 +397,7 @@ mod test {
         let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let pk = sk.as_public_key();
 
-        let a_sig = as_sign::<FAEST128fParameters, _>(&sk, b"correct message", &mut rng);
+        let a_sig = as_sign::<FAEST128fParameters, _>(&sk, b"correct message", &mut rng).unwrap();
 
         assert!(as_ver::<FAEST128fParameters>(&pk, &a_sig, b"wrong message").is_err());
     }
@@ -409,9 +417,9 @@ mod test {
         let instance = witness_sk.instance();
 
         let msg = b"four legs good, two legs better";
-        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng);
+        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng).unwrap();
 
-        let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg);
+        let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg).unwrap();
 
         let extracted = as_ext::<FAEST128fParameters>(&pre_sig, &a_sig);
 

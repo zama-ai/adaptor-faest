@@ -1,18 +1,17 @@
 use std::ops::Deref;
 
 use faest::faest_internal::{
-    BaseParameters, FAESTParameters, FaestHash, IV, OWFParameters, PublicKey, SecretKey,
-    TauParameters, VectorCommitment, VoleCommitmentCRef, faest_sign_with_r, faest_verify_with_mu,
-    volecommit,
+    FAESTParameters, IV, OWFParameters, PublicKey, SecretKey, faest_hash_iv, faest_hash_mu,
+    faest_sign_with_mu_and_r, faest_signature_d, faest_verify_with_mu, faest_volecommit,
+    faest_volecommit_c_size,
 };
 use faest::signature::rand_core::CryptoRngCore;
-use generic_array::{GenericArray, typenum::Unsigned};
-
-type RO<P> =
-    <<<P as FAESTParameters>::OWF as OWFParameters>::BaseParams as BaseParameters>::RandomOracle;
+use generic_array::GenericArray;
 
 pub(crate) struct Poff<P: FAESTParameters> {
-    pub(crate) inner: GenericArray<u8, <<<P::OWF as OWFParameters>::BaseParams as BaseParameters>::VC as VectorCommitment>::LambdaBytesTimes2>,
+    // FAEST v2 note: v1 stored the vector-commitment hcom here; v2's BAVC
+    // VOLE path returns the commitment as `com` with the same 2*lambda size.
+    pub(crate) inner: GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>,
 }
 
 impl<P: FAESTParameters> Poff<P> {
@@ -84,27 +83,20 @@ where
 /// Y:
 /// r:
 pub(crate) fn onizk_p_off<P>(
-    r: &GenericArray<u8, <P::OWF as OWFParameters>::LAMBDABYTES>,
+    // FAEST v2 note: v1 named this associated type LAMBDABYTES.
+    r: &GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
 ) -> Poff<P>
 where
     P: FAESTParameters,
 {
-    let mut volecommit_cs = vec![
-        0;
-        <P::OWF as OWFParameters>::LHATBYTES::USIZE
-            * (<P::Tau as TauParameters>::Tau::USIZE - 1)
-    ];
-    // TODO what is the iv?
-    let iv = IV::default();
-
-    let (hcom, _decom, _u, _gv) = volecommit::<
-        <<P::OWF as OWFParameters>::BaseParams as BaseParameters>::VC,
-        P::Tau,
-        <P::OWF as OWFParameters>::LHATBYTES,
-    >(VoleCommitmentCRef::new(&mut volecommit_cs), r, &iv);
+    // FAEST v2 note: v1 used the supplied iv directly; v2 commits with
+    // H4(iv_pre), and ONIZK fixes iv_pre to default.
+    let mut iv = IV::default();
+    faest_hash_iv::<P>(&mut iv);
+    let (com, _u) = faest_volecommit_for_adaptor::<P>(r, &iv);
 
     // \pi_{off}
-    Poff { inner: hcom }
+    Poff { inner: com }
 }
 
 /// ONIZK.Pon(Y, y, r)
@@ -117,23 +109,24 @@ where
 /// returns: signature (\pi_{on})
 pub(crate) fn onizk_p_on<P>(
     sk: &ONIZKSecretKey<P::OWF>,
-    r: &GenericArray<u8, <P::OWF as OWFParameters>::LAMBDABYTES>,
+    r: &GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
     signature: &mut Pon<P>,
-) where
+) -> Result<(), faest::Error>
+where
     P: FAESTParameters,
 {
-    let mut mu = GenericArray::<
-        u8,
-        <<P::OWF as OWFParameters>::BaseParams as BaseParameters>::LambdaBytesTimes2,
-    >::default();
+    // FAEST v2 note: v1's BaseParams::LambdaBytesTimes2 matched the OWF
+    // alias; v2's adaptor hooks are typed directly on OWF::LambdaBytesTimes2.
+    let mut mu = GenericArray::<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>::default();
 
     // note that message is empty
-    RO::<P>::hash_mu(&mut mu, sk.owf_input(), sk.owf_output(), &[]);
+    faest_hash_mu::<P>(&mut mu, sk.owf_input(), sk.owf_output(), &[]);
 
-    // TODO what is iv?
-    let iv = IV::default();
+    // FAEST v2 note: v1's adaptor hook accepted the VOLE iv; v2 accepts
+    // iv_pre and stores it in the signature before deriving the VOLE iv.
+    let iv_pre = IV::default();
 
-    faest_sign_with_r::<P>(&mu, r, &iv, sk, &mut signature.inner);
+    faest_sign_with_mu_and_r::<P>(&mu, r, &iv_pre, sk, &mut signature.inner)
 }
 
 /// ONIZK.V(Y, \pi)
@@ -146,18 +139,12 @@ pub(crate) fn onizk_v<P>(
 where
     P: FAESTParameters,
 {
-    let mut mu = GenericArray::<
-        u8,
-        <<P::OWF as OWFParameters>::BaseParams as BaseParameters>::LambdaBytesTimes2,
-    >::default();
+    let mut mu = GenericArray::<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>::default();
 
     // note that message is empty
-    RO::<P>::hash_mu(&mut mu, pk.owf_input(), pk.owf_output(), &[]);
+    faest_hash_mu::<P>(&mut mu, pk.owf_input(), pk.owf_output(), &[]);
 
-    // TODO what is iv?
-    let iv = IV::default();
-
-    faest_verify_with_mu::<P>(&mu, &iv, pk, sigma)
+    faest_verify_with_mu::<P>(&mu, pk, sigma)
 }
 
 fn slice_d<P, O>(sigma: &GenericArray<u8, <P as FAESTParameters>::SignatureSize>) -> &[u8]
@@ -165,13 +152,30 @@ where
     P: FAESTParameters<OWF = O>,
     O: OWFParameters,
 {
-    &sigma[O::LHATBYTES::USIZE * (<P::Tau as TauParameters>::Tau::USIZE - 1)
-        + O::LAMBDABYTES::USIZE
-        + 2
-        ..O::LHATBYTES::USIZE * (<P::Tau as TauParameters>::Tau::USIZE - 1)
-            + O::LAMBDABYTES::USIZE
-            + 2
-            + O::LBYTES::USIZE]
+    // FAEST v2 note: v1's d offset was cs || u_tilde, with u_tilde encoded as
+    // lambda bytes plus two fixed bytes. v2 makes u_tilde's length a parameter.
+    faest_signature_d::<P>(sigma)
+}
+
+fn faest_volecommit_for_adaptor<P>(
+    r: &GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
+    iv: &IV,
+) -> (
+    GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>,
+    Box<GenericArray<u8, <P::OWF as OWFParameters>::LHatBytes>>,
+)
+where
+    P: FAESTParameters,
+{
+    // FAEST v2 note: v1's VectorCommitment returned hcom; v2's VOLE commit
+    // returns com and u, and the adaptor stores only com in the offline proof.
+    let mut cs = vec![0; faest_volecommit_c_size::<P>()];
+    let commit = faest_volecommit::<P>(&mut cs, r, iv);
+
+    let mut com = GenericArray::default();
+    com.copy_from_slice(commit.com.as_slice());
+
+    (com, commit.u)
 }
 
 /// ONIZK.EwR(crs, \pi, r)
@@ -179,24 +183,16 @@ where
 /// \pi: (\pi_off, \pi_on)
 /// r:
 pub(crate) fn onizk_ewr<P: FAESTParameters>(
-    r: &GenericArray<u8, <P::OWF as OWFParameters>::LAMBDABYTES>,
+    r: &GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
     p_on: &Pon<P>,
     // p_off: &Poff<P>,
 ) -> Vec<u8> {
     // rerun VOLEcommit -> obtain (... u, V)
-    let mut volecommit_cs = vec![
-        0;
-        <P::OWF as OWFParameters>::LHATBYTES::USIZE
-            * (<P::Tau as TauParameters>::Tau::USIZE - 1)
-    ];
-    // TODO what is the iv?
-    let iv = IV::default();
-
-    let (_hcom, _decom, u, _gv) = volecommit::<
-        <<P::OWF as OWFParameters>::BaseParams as BaseParameters>::VC,
-        P::Tau,
-        <P::OWF as OWFParameters>::LHATBYTES,
-    >(VoleCommitmentCRef::new(&mut volecommit_cs), r, &iv);
+    // FAEST v2 note: extraction must re-run VOLE with H4(default iv_pre), not
+    // with the raw default IV used by v1.
+    let mut iv = IV::default();
+    faest_hash_iv::<P>(&mut iv);
+    let (_com, u) = faest_volecommit_for_adaptor::<P>(r, &iv);
 
     let sigma = &p_on.inner;
     // this is the gamma from ONIZK
@@ -237,7 +233,7 @@ mod test {
         let mut p_on = Pon::<FAEST128fParameters> {
             inner: GenericArray::default(),
         };
-        onizk_p_on(&sk, &r, &mut p_on);
+        onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
         let pk = sk.as_public_key();
         onizk_v::<FAEST128fParameters>(&pk, &p_on.inner).unwrap();
@@ -254,7 +250,7 @@ mod test {
         let mut p_on = Pon::<FAEST128fParameters> {
             inner: GenericArray::default(),
         };
-        onizk_p_on(&sk, &r, &mut p_on);
+        onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
         let wrong_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let wrong_pk = wrong_sk.as_public_key();
@@ -274,7 +270,7 @@ mod test {
         };
 
         // note that p_on contains the witness that we need to extract
-        onizk_p_on(&sk, &r, &mut p_on);
+        onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
         let witness = onizk_ewr(&r, &p_on);
 
@@ -295,7 +291,7 @@ mod test {
         let mut p_on = Pon::<FAEST128fParameters> {
             inner: GenericArray::default(),
         };
-        onizk_p_on(&sk, &r, &mut p_on);
+        onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
         // use a different r for extraction
         let mut wrong_r = GenericArray::default();

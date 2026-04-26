@@ -29,11 +29,11 @@ where
     let instance = witness_sk.instance();
 
     // Pre-signature correctness.
-    let pre_sig = as_pre_sign::<P, _>(&sk, &instance, msg, rng);
+    let pre_sig = as_pre_sign::<P, _>(&sk, &instance, msg, rng).unwrap();
     as_pre_ver::<P>(&pk, &instance, &pre_sig, msg).unwrap();
 
     // Adapted-signature correctness.
-    let a_sig = as_adapt::<P>(&witness_sk, &pre_sig, msg);
+    let a_sig = as_adapt::<P>(&witness_sk, &pre_sig, msg).unwrap();
     as_ver::<P>(&pk, &a_sig, msg).unwrap();
 
     // Extraction correctness.
@@ -42,7 +42,7 @@ where
     assert_eq!(extracted.as_slice(), expected.as_slice());
 
     // Signature correctness (independent of pre-sig / adapt path).
-    let direct_sig = as_sign::<P, _>(&sk, msg, rng);
+    let direct_sig = as_sign::<P, _>(&sk, msg, rng).unwrap();
     as_ver::<P>(&pk, &direct_sig, msg).unwrap();
 
     SignatureSizes {

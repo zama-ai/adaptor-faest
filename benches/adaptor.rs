@@ -20,7 +20,7 @@ fn bench_adaptor(c: &mut Criterion) {
         let sk = as_keygen::<O, _>(&mut rand::thread_rng());
         let witness = Witness::<O>::random(&mut rand::thread_rng());
         let instance = witness.instance();
-        b.iter(|| as_pre_sign::<P, _>(&sk, &instance, MSG, &mut rand::thread_rng()));
+        b.iter(|| as_pre_sign::<P, _>(&sk, &instance, MSG, &mut rand::thread_rng()).unwrap());
     });
 
     group.bench_function("pre_ver", |b| {
@@ -29,7 +29,7 @@ fn bench_adaptor(c: &mut Criterion) {
         let witness = Witness::<O>::random(&mut rand::thread_rng());
         let instance = witness.instance();
         b.iter_batched(
-            || as_pre_sign::<P, _>(&sk, &instance, MSG, &mut rand::thread_rng()),
+            || as_pre_sign::<P, _>(&sk, &instance, MSG, &mut rand::thread_rng()).unwrap(),
             |pre_sig| as_pre_ver::<P>(&pk, &instance, &pre_sig, MSG).unwrap(),
             BatchSize::SmallInput,
         );
@@ -40,8 +40,8 @@ fn bench_adaptor(c: &mut Criterion) {
         let witness = Witness::<O>::random(&mut rand::thread_rng());
         let instance = witness.instance();
         b.iter_batched(
-            || as_pre_sign::<P, _>(&sk, &instance, MSG, &mut rand::thread_rng()),
-            |pre_sig| as_adapt::<P>(&witness, &pre_sig, MSG),
+            || as_pre_sign::<P, _>(&sk, &instance, MSG, &mut rand::thread_rng()).unwrap(),
+            |pre_sig| as_adapt::<P>(&witness, &pre_sig, MSG).unwrap(),
             BatchSize::SmallInput,
         );
     });
@@ -53,8 +53,9 @@ fn bench_adaptor(c: &mut Criterion) {
         let instance = witness.instance();
         b.iter_batched(
             || {
-                let pre_sig = as_pre_sign::<P, _>(&sk, &instance, MSG, &mut rand::thread_rng());
-                as_adapt::<P>(&witness, &pre_sig, MSG)
+                let pre_sig =
+                    as_pre_sign::<P, _>(&sk, &instance, MSG, &mut rand::thread_rng()).unwrap();
+                as_adapt::<P>(&witness, &pre_sig, MSG).unwrap()
             },
             |a_sig| as_ver::<P>(&pk, &a_sig, MSG).unwrap(),
             BatchSize::SmallInput,
@@ -63,7 +64,7 @@ fn bench_adaptor(c: &mut Criterion) {
 
     group.bench_function("sign", |b| {
         let sk = as_keygen::<O, _>(&mut rand::thread_rng());
-        b.iter(|| as_sign::<P, _>(&sk, MSG, &mut rand::thread_rng()));
+        b.iter(|| as_sign::<P, _>(&sk, MSG, &mut rand::thread_rng()).unwrap());
     });
 
     group.bench_function("ext", |b| {
@@ -72,8 +73,9 @@ fn bench_adaptor(c: &mut Criterion) {
         let instance = witness.instance();
         b.iter_batched(
             || {
-                let pre_sig = as_pre_sign::<P, _>(&sk, &instance, MSG, &mut rand::thread_rng());
-                let a_sig = as_adapt::<P>(&witness, &pre_sig, MSG);
+                let pre_sig =
+                    as_pre_sign::<P, _>(&sk, &instance, MSG, &mut rand::thread_rng()).unwrap();
+                let a_sig = as_adapt::<P>(&witness, &pre_sig, MSG).unwrap();
                 (pre_sig, a_sig)
             },
             |(pre_sig, a_sig)| as_ext::<P>(&pre_sig, &a_sig),
