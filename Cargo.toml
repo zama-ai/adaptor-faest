@@ -7,9 +7,9 @@ edition = "2024"
 # faest = { git = "https://github.com/kc1212/faest-rs.git", branch = "kc1212/expose-api-for-adaptor-sig" }
 faest = { path = "../faest-rs" }
 generic-array = { version = "1", features = ["alloc"] }
+rand = { version = "0.8" }
 
 [dev-dependencies]
-rand = { version = "0.8" }
 criterion = "0.5"
 
 [[bench]]

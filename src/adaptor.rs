@@ -6,12 +6,14 @@ use faest::{
     },
     signature::rand_core::CryptoRngCore,
 };
-use generic_array::GenericArray;
+use generic_array::{GenericArray, typenum::Unsigned};
 
 use crate::onizk::{
     ONIZKPublicKey, ONIZKSecretKey, Poff, Pon, onizk_ewr, onizk_keygen, onizk_p_off, onizk_p_on,
     onizk_v,
 };
+
+pub mod test_utils;
 
 /// The witness keypair used in `as_adapt` / `as_ext`. Opaque wrapper so
 /// that ONIZK internals are not part of the public API.
@@ -68,12 +70,27 @@ pub struct AdaptorPreSigature<P: FAESTParameters> {
     r: GenericArray<u8, <P::OWF as OWFParameters>::LAMBDABYTES>,
 }
 
+impl<P: FAESTParameters> AdaptorPreSigature<P> {
+    pub fn size(&self) -> usize {
+        self.signature.len() + self.r.len()
+    }
+}
+
 pub struct AdaptorSignature<P: FAESTParameters> {
     // The ONIZK instance Y that `p_on` proves knowledge of the witness for.
     public_key: ONIZKPublicKey<P::OWF>,
     signature: GenericArray<u8, P::SignatureSize>,
     p_off: Poff<P>,
     p_on: Pon<P>,
+}
+
+impl<P: FAESTParameters> AdaptorSignature<P> {
+    pub fn size(&self) -> usize {
+        <<P::OWF as OWFParameters>::PK as Unsigned>::USIZE
+            + self.signature.len()
+            + self.p_off.size()
+            + self.p_on.size()
+    }
 }
 
 pub struct AdaptorSigningKey<O: OWFParameters> {
@@ -408,31 +425,9 @@ mod test {
     // the correctness definition.
     #[test]
     fn as_full_flow() {
-        let mut rng = rand::thread_rng();
-        let sk = as_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
-        let pk = sk.as_public_key();
-
-        let witness_sk = Witness::<<FAEST128fParameters as FAESTParameters>::OWF>::random(&mut rng);
-        let instance = witness_sk.instance();
-
-        let msg = b"four legs good, two legs better";
-
-        // Pre-signature correctness.
-        let pre_sig = as_pre_sign::<FAEST128fParameters, _>(&sk, &instance, msg, &mut rng);
-        as_pre_ver::<FAEST128fParameters>(&pk, &instance, &pre_sig, msg).unwrap();
-
-        // Adapted-signature correctness.
-        let a_sig = as_adapt::<FAEST128fParameters>(&witness_sk, &pre_sig, msg);
-        as_ver::<FAEST128fParameters>(&pk, &a_sig, msg).unwrap();
-
-        // Extraction correctness.
-        let extracted = as_ext::<FAEST128fParameters>(&pre_sig, &a_sig);
-        let expected =
-            <<FAEST128fParameters as FAESTParameters>::OWF as OWFParameters>::witness(&witness_sk);
-        assert_eq!(extracted.as_slice(), expected.as_slice());
-
-        // Signature correctness (independent of pre-sig / adapt path).
-        let direct_sig = as_sign::<FAEST128fParameters, _>(&sk, msg, &mut rng);
-        as_ver::<FAEST128fParameters>(&pk, &direct_sig, msg).unwrap();
+        let _ = test_utils::as_full_flow::<FAEST128fParameters, _>(
+            &mut rand::thread_rng(),
+            b"four legs good, two legs better",
+        );
     }
 }

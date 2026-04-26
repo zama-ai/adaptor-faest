@@ -15,8 +15,20 @@ pub(crate) struct Poff<P: FAESTParameters> {
     pub(crate) inner: GenericArray<u8, <<<P::OWF as OWFParameters>::BaseParams as BaseParameters>::VC as VectorCommitment>::LambdaBytesTimes2>,
 }
 
+impl<P: FAESTParameters> Poff<P> {
+    pub(crate) fn size(&self) -> usize {
+        self.inner.len()
+    }
+}
+
 pub(crate) struct Pon<P: FAESTParameters> {
     pub(crate) inner: GenericArray<u8, P::SignatureSize>,
+}
+
+impl<P: FAESTParameters> Pon<P> {
+    pub(crate) fn size(&self) -> usize {
+        self.inner.len()
+    }
 }
 
 pub(crate) struct ONIZKSecretKey<O: OWFParameters> {
