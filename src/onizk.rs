@@ -43,6 +43,10 @@ impl<O: OWFParameters> Deref for ONIZKSecretKey<O> {
 }
 
 impl<O: OWFParameters> ONIZKSecretKey<O> {
+    pub(crate) fn from_secret_key(inner: SecretKey<O>) -> Self {
+        Self { inner }
+    }
+
     pub(crate) fn as_public_key(&self) -> ONIZKPublicKey<O> {
         ONIZKPublicKey {
             inner: self.inner.as_public_key(),
@@ -50,8 +54,15 @@ impl<O: OWFParameters> ONIZKSecretKey<O> {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct ONIZKPublicKey<O: OWFParameters> {
     inner: PublicKey<O>,
+}
+
+impl<O: OWFParameters> ONIZKPublicKey<O> {
+    pub(crate) fn from_public_key(inner: PublicKey<O>) -> Self {
+        Self { inner }
+    }
 }
 
 impl<O: OWFParameters> From<ONIZKPublicKey<O>> for PublicKey<O> {
