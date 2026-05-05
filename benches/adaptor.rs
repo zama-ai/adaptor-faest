@@ -1,8 +1,9 @@
 use adaptor_faest::adaptor::{
     Witness, as_adapt, as_ext, as_keygen, as_pre_sign, as_pre_ver, as_sign, as_ver,
 };
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use faest::faest_internal::{FAEST128fParameters, FAESTParameters};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
+use faest::faest_internal::{FAEST128fParameters, FAESTParameters, OWFParameters};
+use generic_array::typenum::Unsigned;
 
 type P = FAEST128fParameters;
 type O = <P as FAESTParameters>::OWF;
@@ -12,9 +13,12 @@ const MSG: &[u8] = b"bench message";
 fn bench_adaptor(c: &mut Criterion) {
     let mut group = c.benchmark_group("adaptor_faest128f");
 
-    group.bench_function("keygen", |b| {
-        b.iter(|| as_keygen::<O, _>(&mut rand::thread_rng()))
-    });
+    let pk_size = <<O as OWFParameters>::PK as Unsigned>::USIZE;
+    group.bench_with_input(
+        BenchmarkId::new("keygen", format!("pk={pk_size}B")),
+        &pk_size,
+        |b, _| b.iter(|| as_keygen::<O, _>(&mut rand::thread_rng())),
+    );
 
     group.bench_function("pre_sign", |b| {
         let sk = as_keygen::<O, _>(&mut rand::thread_rng());

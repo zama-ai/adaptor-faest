@@ -5,6 +5,10 @@ fn report<P: FAESTParameters>(name: &str) {
     let sizes = as_full_flow::<P, _>(&mut rand::thread_rng(), b"size report");
     println!("{name}");
     println!(
+        "  public key      ({:>6} B)  [as_keygen]",
+        sizes.public_key
+    );
+    println!(
         "  pre-signature   ({:>6} B)  [as_pre_sign]",
         sizes.pre_signature
     );

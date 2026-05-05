@@ -44,6 +44,7 @@ get_median_ms() {
   for step in keygen pre_sign pre_ver adapt ver sign ext; do
     t=$(get_median_ms "$step")
     case "$step" in
+      keygen)   sz=$(get_size as_keygen) ;;
       pre_sign) sz=$(get_size as_pre_sign) ;;
       adapt)    sz=$(get_size as_adapt) ;;
       sign)     sz=$(get_size as_sign) ;;
