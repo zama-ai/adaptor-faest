@@ -2,12 +2,14 @@ use faest::{
     faest_internal::{FAESTParameters, OWFParameters},
     signature::rand_core::CryptoRngCore,
 };
+use generic_array::typenum::Unsigned;
 
 use crate::adaptor::{
     Witness, as_adapt, as_ext, as_keygen, as_pre_sign, as_pre_ver, as_sign, as_ver,
 };
 
 pub struct SignatureSizes {
+    pub public_key: usize,
     pub pre_signature: usize,
     pub adapted_signature: usize,
     pub direct_signature: usize,
@@ -46,6 +48,7 @@ where
     as_ver::<P>(&pk, &direct_sig, msg).unwrap();
 
     SignatureSizes {
+        public_key: <<P::OWF as OWFParameters>::PK as Unsigned>::USIZE,
         pre_signature: pre_sig.size(),
         adapted_signature: a_sig.size(),
         direct_signature: direct_sig.size(),

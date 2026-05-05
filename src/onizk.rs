@@ -1,9 +1,9 @@
 use std::ops::Deref;
 
 use faest::faest_internal::{
-    FAESTParameters, IV, OWFParameters, PublicKey, SecretKey, faest_hash_iv, faest_hash_mu,
-    faest_sign_with_mu_and_r, faest_signature_d, faest_verify_with_mu, faest_volecommit,
-    faest_volecommit_c_size,
+    FAESTParameters, IV, OWFParameters, PublicKey, SecretKey, Witness, faest_hash_iv,
+    faest_hash_mu, faest_sign_with_mu_and_r, faest_sign_with_mu_and_r_and_witness,
+    faest_signature_d, faest_verify_with_mu, faest_volecommit, faest_volecommit_c_size,
 };
 use faest::signature::rand_core::CryptoRngCore;
 use generic_array::GenericArray;
@@ -140,6 +140,27 @@ where
     faest_sign_with_mu_and_r::<P>(&mu, r, &iv_pre, sk, &mut signature.inner)
 }
 
+/// ONIZK.Pon variant that takes a precomputed extended witness instead of
+/// deriving it from `sk` via `OWFParameters::witness`.
+///
+/// Used by the instance-hiding adaptor where the SHAKE preimage carries a
+/// signer-supplied `t1` that cannot be reproduced from `(sk.owf_key,
+/// sk.pk.owf_input)` alone.
+pub(crate) fn onizk_p_on_with_witness<P>(
+    sk: &ONIZKSecretKey<P::OWF>,
+    witness: &Witness<P::OWF>,
+    r: &GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
+    signature: &mut Pon<P>,
+) -> Result<(), faest::Error>
+where
+    P: FAESTParameters,
+{
+    let mut mu = GenericArray::<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>::default();
+    faest_hash_mu::<P>(&mut mu, sk.owf_input(), sk.owf_output(), &[]);
+    let iv_pre = IV::default();
+    faest_sign_with_mu_and_r_and_witness::<P>(&mu, r, &iv_pre, sk, witness, &mut signature.inner)
+}
+
 /// ONIZK.V(Y, \pi)
 /// Y: public key
 /// \pi: p_off and p_on
@@ -168,6 +189,7 @@ where
     faest_signature_d::<P>(sigma)
 }
 
+#[expect(clippy::type_complexity)]
 fn faest_volecommit_for_adaptor<P>(
     r: &GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
     iv: &IV,
