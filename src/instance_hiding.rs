@@ -4,23 +4,22 @@ use faest::{
     faest_internal::{
         FAESTInstanceHiding128fParameters, FAESTParameters, OWFInstanceHiding128, OWFParameters,
         PublicKey, SecretKey, faest_sign, faest_verify, instance_hiding_base_instance,
-        instance_hiding_public_key, instance_hiding_secret_key,
+        instance_hiding_proving_key, instance_hiding_public_key,
     },
     signature::rand_core::CryptoRngCore,
 };
 use generic_array::{GenericArray, typenum::Unsigned};
 
 use crate::onizk::{
-    ONIZKPublicKey, ONIZKSecretKey, Poff, Pon, onizk_ewr, onizk_p_off, onizk_p_on_with_witness,
-    onizk_v,
+    ONIZKPublicKey, Poff, Pon, onizk_ewr, onizk_p_off, onizk_p_on_with_witness, onizk_v,
 };
 
 pub type DefaultOnizkParameters = FAESTInstanceHiding128fParameters;
 
-/// The public first component of the instance-hiding statement: `Y xor t`.
+/// The public first component of the instance-hiding statement: `Y xor t0`.
 type HidingInput = GenericArray<u8, <OWFInstanceHiding128 as OWFParameters>::InputSize>;
 
-/// The hiding value `t`, also the SHAKE preimage committed inside `y_ex = (y, t)`.
+/// One 128-bit block of the instance-hiding mask/preimage.
 type HidingMask = GenericArray<u8, <OWFInstanceHiding128 as OWFParameters>::LambdaBytes>;
 
 /// The ordinary witness `y` hidden by the instance-hiding adaptor variant.
@@ -64,11 +63,7 @@ fn build_msg_for_signing<O: OWFParameters>(y: &PublicKey<O>, p_off: &[u8], m: &[
     msg
 }
 
-fn y_ex(
-    instance: &Instance,
-    t0: &HidingMask,
-    t1: &HidingMask,
-) -> PublicKey<OWFInstanceHiding128> {
+fn y_ex(instance: &Instance, t0: &HidingMask, t1: &HidingMask) -> PublicKey<OWFInstanceHiding128> {
     instance_hiding_public_key(&instance.y, t0, t1)
 }
 
@@ -237,19 +232,22 @@ where
     OnizkParameters: FAESTParameters<OWF = OWFInstanceHiding128>,
 {
     let p_off = onizk_p_off::<OnizkParameters>(&pre_sig.r);
-    // Reconstruct the OWFInstanceHiding128 SecretKey *plus* the precomputed
-    // extended witness encoding `(y, t0, t1)`. The signer-supplied `t1` is
-    // embedded in `witness` and cannot be recovered from
-    // `(sk.owf_key, sk.pk.owf_input)` alone, so the regular `onizk_p_on`
-    // (which calls `OWFParameters::witness(sk)`) is not usable here.
-    let (sk_inner, witness) = instance_hiding_secret_key(&sk.y, &pre_sig.t0, &pre_sig.t1)?;
-    let secret_key = ONIZKSecretKey::from_secret_key(sk_inner);
-    let public_key = secret_key.as_public_key();
+    // Build the instance-hiding public key plus the exact `(y, t0, t1)`
+    // extended witness. The signer-supplied `t1` cannot be recovered from a
+    // regular `SecretKey`, so the ordinary `onizk_p_on` witness path is not
+    // usable here.
+    let proving_key = instance_hiding_proving_key(&sk.y, &pre_sig.t0, &pre_sig.t1)?;
+    let public_key = ONIZKPublicKey::from_public_key(proving_key.public_key);
 
     let mut p_on = Pon::<OnizkParameters> {
         inner: GenericArray::default(),
     };
-    onizk_p_on_with_witness::<OnizkParameters>(&secret_key, &witness, &pre_sig.r, &mut p_on)?;
+    onizk_p_on_with_witness::<OnizkParameters>(
+        &public_key,
+        &proving_key.witness,
+        &pre_sig.r,
+        &mut p_on,
+    )?;
 
     Ok(AdaptorSignature {
         public_key: PublicKey::from(public_key),
@@ -475,9 +473,11 @@ mod test {
 
         let zero_t0 = HidingMask::default();
         let zero_t1 = HidingMask::default();
-        let original_y_as_hiding_pk = ONIZKPublicKey::from_public_key(
-            instance_hiding_public_key(&instance.y, &zero_t0, &zero_t1),
-        );
+        let original_y_as_hiding_pk = ONIZKPublicKey::from_public_key(instance_hiding_public_key(
+            &instance.y,
+            &zero_t0,
+            &zero_t1,
+        ));
         assert!(
             onizk_v::<DefaultOnizkParameters>(&original_y_as_hiding_pk, &a_sig.p_on.inner).is_err()
         );
@@ -506,9 +506,9 @@ mod test {
         let extracted = as_ext::<SigParameters>(&pre_sig, &a_sig);
         // The extracted witness must match the same `(y, t0, t1)`-based
         // extended witness that the adapter committed inside `p_on`.
-        // `OWFInstanceHiding128::witness(&sk)` would derive a *deterministic*
-        // `t1` from `sk.owf_key`, which disagrees with the random `t1` the
-        // signer sampled — so we use `instance_hiding_extendwitness` instead.
+        // The regular `OWFInstanceHiding128::witness(&sk)` path is
+        // intentionally unsupported because it cannot recover the signer's
+        // random `t1`, so we use `instance_hiding_extendwitness` instead.
         let expected = instance_hiding_extendwitness(&witness.y, &pre_sig.t0, &pre_sig.t1);
 
         assert_eq!(extracted.as_slice(), expected.as_slice());

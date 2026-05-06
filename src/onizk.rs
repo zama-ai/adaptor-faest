@@ -43,10 +43,6 @@ impl<O: OWFParameters> Deref for ONIZKSecretKey<O> {
 }
 
 impl<O: OWFParameters> ONIZKSecretKey<O> {
-    pub(crate) fn from_secret_key(inner: SecretKey<O>) -> Self {
-        Self { inner }
-    }
-
     pub(crate) fn as_public_key(&self) -> ONIZKPublicKey<O> {
         ONIZKPublicKey {
             inner: self.inner.as_public_key(),
@@ -144,10 +140,10 @@ where
 /// deriving it from `sk` via `OWFParameters::witness`.
 ///
 /// Used by the instance-hiding adaptor where the SHAKE preimage carries a
-/// signer-supplied `t1` that cannot be reproduced from `(sk.owf_key,
-/// sk.pk.owf_input)` alone.
+/// signer-supplied `t1` that cannot be reproduced from a regular
+/// `SecretKey` alone.
 pub(crate) fn onizk_p_on_with_witness<P>(
-    sk: &ONIZKSecretKey<P::OWF>,
+    pk: &ONIZKPublicKey<P::OWF>,
     witness: &Witness<P::OWF>,
     r: &GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
     signature: &mut Pon<P>,
@@ -156,9 +152,9 @@ where
     P: FAESTParameters,
 {
     let mut mu = GenericArray::<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>::default();
-    faest_hash_mu::<P>(&mut mu, sk.owf_input(), sk.owf_output(), &[]);
+    faest_hash_mu::<P>(&mut mu, pk.owf_input(), pk.owf_output(), &[]);
     let iv_pre = IV::default();
-    faest_sign_with_mu_and_r_and_witness::<P>(&mu, r, &iv_pre, sk, witness, &mut signature.inner)
+    faest_sign_with_mu_and_r_and_witness::<P>(&mu, r, &iv_pre, pk, witness, &mut signature.inner)
 }
 
 /// ONIZK.V(Y, \pi)
