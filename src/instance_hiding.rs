@@ -357,14 +357,65 @@ pub struct InstanceHidingAdaptor<
     OnizkParameters: FAESTParameters = DefaultOnizkParameters,
 >(PhantomData<(SigParameters, OnizkParameters)>);
 
+pub mod test_utils {
+    use faest::{
+        faest_internal::{FAESTParameters, OWFParameters, instance_hiding_extendwitness},
+        signature::rand_core::CryptoRngCore,
+    };
+    use generic_array::typenum::Unsigned;
+
+    pub use crate::adaptor::test_utils::SignatureSizes;
+
+    use super::{
+        DefaultOnizkParameters, Witness, as_adapt, as_ext, as_keygen, as_pre_sign, as_pre_ver,
+        as_sign, as_ver,
+    };
+
+    /// Run the full instance-hiding adaptor-signature flow once. Panics on any
+    /// correctness failure and returns the byte sizes of the signature artifacts.
+    pub fn as_full_flow<P, R>(rng: &mut R, msg: &[u8]) -> SignatureSizes
+    where
+        P: FAESTParameters,
+        R: CryptoRngCore,
+    {
+        let sk = as_keygen::<P::OWF, _>(rng);
+        let pk = sk.as_public_key();
+
+        let witness = Witness::random(rng);
+        let instance = witness.instance();
+
+        let pre_sig = as_pre_sign::<P, _>(&sk, &instance, msg, rng).unwrap();
+        as_pre_ver::<P>(&pk, &instance, &pre_sig, msg).unwrap();
+
+        let a_sig = as_adapt::<P>(&witness, &pre_sig, msg).unwrap();
+        as_ver::<P>(&pk, &a_sig, msg).unwrap();
+
+        let extracted = as_ext::<P>(&pre_sig, &a_sig);
+        let expected = instance_hiding_extendwitness::<
+            <DefaultOnizkParameters as FAESTParameters>::OWF,
+        >(&witness.y, &pre_sig.t0, &pre_sig.t1);
+        assert_eq!(extracted.as_slice(), expected.as_slice());
+
+        let direct_sig = as_sign::<P, _>(&sk, msg, rng).unwrap();
+        as_ver::<P>(&pk, &direct_sig, msg).unwrap();
+
+        SignatureSizes {
+            public_key: <<P::OWF as OWFParameters>::PK as Unsigned>::USIZE,
+            pre_signature: pre_sig.size(),
+            adapted_signature: a_sig.size(),
+            direct_signature: direct_sig.size(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use faest::{
         ByteEncoding,
         faest_internal::{
-            FAEST128fParameters, FAESTInstanceHidingRainHash128sParameters,
-            FAESTInstanceHiding128sParameters, instance_hiding_extendwitness,
+            FAEST128fParameters, FAESTInstanceHiding128sParameters,
+            FAESTInstanceHidingRainHash128sParameters, instance_hiding_extendwitness,
         },
     };
 
@@ -429,10 +480,8 @@ mod test {
         )
         .unwrap();
 
-        as_ver_with_onizk::<SigParameters, FAESTInstanceHiding128sParameters>(
-            &pk, &a_sig, msg,
-        )
-        .unwrap();
+        as_ver_with_onizk::<SigParameters, FAESTInstanceHiding128sParameters>(&pk, &a_sig, msg)
+            .unwrap();
     }
 
     #[test]

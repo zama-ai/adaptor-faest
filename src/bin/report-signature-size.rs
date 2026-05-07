@@ -1,8 +1,8 @@
-use adaptor_faest::adaptor::test_utils::as_full_flow;
-use faest::faest_internal::{FAEST128fParameters, FAESTParameters};
+use adaptor_faest::adaptor::test_utils::SignatureSizes;
+use adaptor_faest::{adaptor, instance_hiding};
+use faest::faest_internal::FAEST128fParameters;
 
-fn report<P: FAESTParameters>(name: &str) {
-    let sizes = as_full_flow::<P, _>(&mut rand::thread_rng(), b"size report");
+fn print_report(name: &str, sizes: &SignatureSizes) {
     println!("{name}");
     println!("  public key      ({:>6} B)  [as_keygen]", sizes.public_key);
     println!(
@@ -20,5 +20,12 @@ fn report<P: FAESTParameters>(name: &str) {
 }
 
 fn main() {
-    report::<FAEST128fParameters>("FAEST128f");
+    let rng = &mut rand::thread_rng();
+    let standard = adaptor::test_utils::as_full_flow::<FAEST128fParameters, _>(rng, b"size report");
+    let ih =
+        instance_hiding::test_utils::as_full_flow::<FAEST128fParameters, _>(rng, b"size report");
+
+    print_report("FAEST128f standard adaptor", &standard);
+    println!();
+    print_report("FAEST128f instance-hiding adaptor", &ih);
 }
