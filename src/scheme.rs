@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use faest::faest_internal::{FAESTParameters, OWFInstanceHiding128};
+use faest::faest_internal::{FAESTParameters, InstanceHidingOWF};
 
 use crate::{adaptor, instance_hiding};
 
@@ -31,7 +31,8 @@ impl<SigParameters, OnizkParameters> AdaptorSignatureScheme
     for instance_hiding::InstanceHidingAdaptor<SigParameters, OnizkParameters>
 where
     SigParameters: FAESTParameters,
-    OnizkParameters: FAESTParameters<OWF = OWFInstanceHiding128>,
+    OnizkParameters: FAESTParameters,
+    OnizkParameters::OWF: InstanceHidingOWF,
 {
     type SigParameters = SigParameters;
     type OnizkParameters = OnizkParameters;
