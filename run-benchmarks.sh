@@ -12,6 +12,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+export RUSTFLAGS="-C target-cpu=native"
+
 OUT="${1:-bench-results.csv}"
 VARIANTS=("FAEST128f" "FAEST128f-instance-hiding")
 BENCH_GROUPS=("adaptor_faest128f" "instance_hiding_adaptor_faest128f")
