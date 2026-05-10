@@ -56,13 +56,17 @@ pub struct Instance {
     y: HidingInput,
 }
 
-fn build_msg_for_signing<O: OWFParameters>(y: &PublicKey<O>, p_off: &[u8], m: &[u8]) -> Vec<u8> {
+fn build_msg_for_signing<P: FAESTParameters>(
+    y: &PublicKey<P::OWF>,
+    p_off: &Poff<P>,
+    m: &[u8],
+) -> Vec<u8> {
     let y_in = y.owf_input();
     let y_out = y.owf_output();
-    let mut msg = Vec::with_capacity(y_in.len() + y_out.len() + p_off.len() + m.len());
+    let mut msg = Vec::with_capacity(y_in.len() + y_out.len() + p_off.size() + m.len());
     msg.extend_from_slice(y_in);
     msg.extend_from_slice(y_out);
-    msg.extend_from_slice(p_off);
+    p_off.append_to(&mut msg);
     msg.extend_from_slice(m);
     msg
 }
@@ -179,7 +183,7 @@ where
 
     let p_off = onizk_p_off::<OnizkParameters>(&r);
     let public_key = y_ex::<OnizkParameters::OWF>(instance, &t0, &t1);
-    let msg = build_msg_for_signing(&public_key, &p_off.inner, m);
+    let msg = build_msg_for_signing::<OnizkParameters>(&public_key, &p_off, m);
 
     let mut signature = GenericArray::<u8, SigParameters::SignatureSize>::default();
     faest_sign::<SigParameters>(&msg, &sk.sk_regular, &[], &mut signature)?;
@@ -217,7 +221,7 @@ where
 {
     let p_off = onizk_p_off::<OnizkParameters>(&pre_sig.r);
     let public_key = y_ex::<OnizkParameters::OWF>(instance, &pre_sig.t0, &pre_sig.t1);
-    let msg = build_msg_for_signing(&public_key, &p_off.inner, m);
+    let msg = build_msg_for_signing::<OnizkParameters>(&public_key, &p_off, m);
 
     faest_verify::<SigParameters>(&msg, &pk.pk_regular, &pre_sig.signature)
 }
@@ -291,11 +295,11 @@ where
     OnizkParameters: FAESTParameters,
     OnizkParameters::OWF: InstanceHidingOWF,
 {
-    let msg = build_msg_for_signing(&a_sig.public_key, &a_sig.p_off.inner, m);
+    let msg = build_msg_for_signing::<OnizkParameters>(&a_sig.public_key, &a_sig.p_off, m);
     faest_verify::<SigParameters>(&msg, &vk.pk_regular, &a_sig.signature)?;
 
     let public_key = ONIZKPublicKey::from_public_key(a_sig.public_key.clone());
-    onizk_v::<OnizkParameters>(&public_key, &a_sig.p_on.inner)?;
+    onizk_v::<OnizkParameters>(&public_key, &a_sig.p_off, &a_sig.p_on)?;
 
     Ok(())
 }
@@ -415,9 +419,10 @@ mod test {
         ByteEncoding,
         faest_internal::{
             FAEST128fParameters, FAESTInstanceHiding128sParameters,
-            FAESTInstanceHidingRainHash128sParameters, instance_hiding_extendwitness,
+            FAESTInstanceHidingRainHash128sParameters, faest_sign, instance_hiding_extendwitness,
         },
     };
+    use rand::RngCore;
 
     type SigParameters = FAEST128fParameters;
 
@@ -537,9 +542,9 @@ mod test {
             as_keygen::<<SigParameters as FAESTParameters>::OWF, _>(&mut rng).as_public_key();
         assert!(as_ver::<SigParameters>(&wrong_pk, &a_sig, msg).is_err());
 
-        a_sig.p_off.inner[0] ^= 1;
+        a_sig.p_off.com[0] ^= 1;
         assert!(as_ver::<SigParameters>(&pk, &a_sig, msg).is_err());
-        a_sig.p_off.inner[0] ^= 1;
+        a_sig.p_off.com[0] ^= 1;
 
         let mut encoded_y_ex = a_sig.public_key.to_bytes();
         encoded_y_ex[0] ^= 1;
@@ -547,6 +552,36 @@ mod test {
             encoded_y_ex.as_slice(),
         )
         .unwrap();
+        assert!(as_ver::<SigParameters>(&pk, &a_sig, msg).is_err());
+    }
+
+    #[test]
+    fn as_ver_rejects_mixed_p_off_and_p_on() {
+        let mut rng = rand::thread_rng();
+        let (sk, pk, witness, instance) = setup();
+        let msg = b"instance hiding adaptor";
+        let pre_sig_a = as_pre_sign::<SigParameters, _>(&sk, &instance, msg, &mut rng).unwrap();
+
+        let mut r_b = GenericArray::<
+            u8,
+            <<DefaultOnizkParameters as FAESTParameters>::OWF as OWFParameters>::LambdaBytes,
+        >::default();
+        rng.fill_bytes(&mut r_b);
+        let p_off_b = crate::onizk::onizk_p_off::<DefaultOnizkParameters>(&r_b);
+        let public_key_b = y_ex::<<DefaultOnizkParameters as FAESTParameters>::OWF>(
+            &instance,
+            &pre_sig_a.t0,
+            &pre_sig_a.t1,
+        );
+        let msg_b = build_msg_for_signing::<DefaultOnizkParameters>(&public_key_b, &p_off_b, msg);
+        let mut signature_b =
+            GenericArray::<u8, <SigParameters as FAESTParameters>::SignatureSize>::default();
+        faest_sign::<SigParameters>(&msg_b, &sk.sk_regular, &[], &mut signature_b).unwrap();
+
+        let mut a_sig = as_adapt::<SigParameters>(&witness, &pre_sig_a, msg).unwrap();
+        a_sig.signature = signature_b;
+        a_sig.p_off = p_off_b;
+
         assert!(as_ver::<SigParameters>(&pk, &a_sig, msg).is_err());
     }
 
@@ -559,7 +594,7 @@ mod test {
         let a_sig = as_adapt::<SigParameters>(&witness, &pre_sig, msg).unwrap();
 
         let y_ex = ONIZKPublicKey::from_public_key(a_sig.public_key.clone());
-        onizk_v::<DefaultOnizkParameters>(&y_ex, &a_sig.p_on.inner).unwrap();
+        onizk_v::<DefaultOnizkParameters>(&y_ex, &a_sig.p_off, &a_sig.p_on).unwrap();
 
         let zero_t0 = HidingMask::default();
         let zero_t1 = HidingMask::default();
@@ -568,7 +603,8 @@ mod test {
                 <DefaultOnizkParameters as FAESTParameters>::OWF,
             >(&instance.y, &zero_t0, &zero_t1));
         assert!(
-            onizk_v::<DefaultOnizkParameters>(&original_y_as_hiding_pk, &a_sig.p_on.inner).is_err()
+            onizk_v::<DefaultOnizkParameters>(&original_y_as_hiding_pk, &a_sig.p_off, &a_sig.p_on)
+                .is_err()
         );
     }
 

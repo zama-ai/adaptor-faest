@@ -3,20 +3,27 @@ use std::ops::Deref;
 use faest::faest_internal::{
     FAESTParameters, IV, OWFParameters, PublicKey, SecretKey, Witness, faest_hash_iv,
     faest_hash_mu, faest_sign_with_mu_and_r, faest_sign_with_mu_and_r_and_witness,
-    faest_signature_d, faest_verify_with_mu, faest_volecommit, faest_volecommit_c_size,
+    faest_signature_d, faest_verify_with_mu_and_vole_commitment, faest_volecommit,
+    faest_volecommit_c_size,
 };
 use faest::signature::rand_core::CryptoRngCore;
 use generic_array::GenericArray;
 
 pub(crate) struct Poff<P: FAESTParameters> {
     // FAEST v2 note: v1 stored the vector-commitment hcom here; v2's BAVC
-    // VOLE path returns the commitment as `com` with the same 2*lambda size.
-    pub(crate) inner: GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>,
+    // VOLE path exposes both `com` and the public derandomization vector `c`.
+    pub(crate) com: GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>,
+    pub(crate) c: Vec<u8>,
 }
 
 impl<P: FAESTParameters> Poff<P> {
     pub(crate) fn size(&self) -> usize {
-        self.inner.len()
+        self.com.len() + self.c.len()
+    }
+
+    pub(crate) fn append_to(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.com);
+        out.extend_from_slice(&self.c);
     }
 }
 
@@ -100,10 +107,10 @@ where
     // H4(iv_pre), and ONIZK fixes iv_pre to default.
     let mut iv = IV::default();
     faest_hash_iv::<P>(&mut iv);
-    let (com, _u) = faest_volecommit_for_adaptor::<P>(r, &iv);
+    let (com, c, _u) = faest_volecommit_for_adaptor::<P>(r, &iv);
 
     // \pi_{off}
-    Poff { inner: com }
+    Poff { com, c }
 }
 
 /// ONIZK.Pon(Y, y, r)
@@ -162,7 +169,8 @@ where
 /// \pi: p_off and p_on
 pub(crate) fn onizk_v<P>(
     pk: &ONIZKPublicKey<P::OWF>,
-    sigma: &GenericArray<u8, P::SignatureSize>,
+    p_off: &Poff<P>,
+    p_on: &Pon<P>,
 ) -> Result<(), faest::Error>
 where
     P: FAESTParameters,
@@ -172,7 +180,7 @@ where
     // note that message is empty
     faest_hash_mu::<P>(&mut mu, pk.owf_input(), pk.owf_output(), &[]);
 
-    faest_verify_with_mu::<P>(&mu, pk, sigma)
+    faest_verify_with_mu_and_vole_commitment::<P>(&mu, pk, &p_on.inner, &p_off.com, &p_off.c)
 }
 
 fn slice_d<P, O>(sigma: &GenericArray<u8, <P as FAESTParameters>::SignatureSize>) -> &[u8]
@@ -191,6 +199,7 @@ fn faest_volecommit_for_adaptor<P>(
     iv: &IV,
 ) -> (
     GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>,
+    Vec<u8>,
     Box<GenericArray<u8, <P::OWF as OWFParameters>::LHatBytes>>,
 )
 where
@@ -204,11 +213,10 @@ where
     let mut com = GenericArray::default();
     com.copy_from_slice(commit.com.as_slice());
 
-    (com, commit.u)
+    (com, cs, commit.u)
 }
 
 /// ONIZK.EwR(crs, \pi, r)
-/// crs: ??
 /// \pi: (\pi_off, \pi_on)
 /// r:
 pub(crate) fn onizk_ewr<P: FAESTParameters>(
@@ -221,7 +229,7 @@ pub(crate) fn onizk_ewr<P: FAESTParameters>(
     // with the raw default IV used by v1.
     let mut iv = IV::default();
     faest_hash_iv::<P>(&mut iv);
-    let (_com, u) = faest_volecommit_for_adaptor::<P>(r, &iv);
+    let (_com, _c, u) = faest_volecommit_for_adaptor::<P>(r, &iv);
 
     let sigma = &p_on.inner;
     // this is the gamma from ONIZK
@@ -242,7 +250,7 @@ mod test {
     use generic_array::GenericArray;
     use rand::RngCore;
 
-    use crate::onizk::{onizk_ewr, onizk_keygen, onizk_p_on, onizk_v};
+    use crate::onizk::{onizk_ewr, onizk_keygen, onizk_p_off, onizk_p_on, onizk_v};
     use faest::faest_internal::{FAEST128fParameters, FAESTParameters, OWFParameters};
 
     // properties to verify
@@ -265,7 +273,8 @@ mod test {
         onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
         let pk = sk.as_public_key();
-        onizk_v::<FAEST128fParameters>(&pk, &p_on.inner).unwrap();
+        let p_off = onizk_p_off::<FAEST128fParameters>(&r);
+        onizk_v::<FAEST128fParameters>(&pk, &p_off, &p_on).unwrap();
     }
 
     #[test]
@@ -281,9 +290,48 @@ mod test {
         };
         onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
+        let p_off = onizk_p_off::<FAEST128fParameters>(&r);
         let wrong_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let wrong_pk = wrong_sk.as_public_key();
-        assert!(onizk_v::<FAEST128fParameters>(&wrong_pk, &p_on.inner).is_err());
+        assert!(onizk_v::<FAEST128fParameters>(&wrong_pk, &p_off, &p_on).is_err());
+    }
+
+    #[test]
+    fn sign_and_verify_wrong_p_off_com() {
+        let mut rng = rand::thread_rng();
+        let sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+
+        let mut r = GenericArray::default();
+        rng.fill_bytes(&mut r);
+
+        let mut p_on = Pon::<FAEST128fParameters> {
+            inner: GenericArray::default(),
+        };
+        onizk_p_on(&sk, &r, &mut p_on).unwrap();
+
+        let pk = sk.as_public_key();
+        let mut p_off = onizk_p_off::<FAEST128fParameters>(&r);
+        p_off.com[0] ^= 1;
+        assert!(onizk_v::<FAEST128fParameters>(&pk, &p_off, &p_on).is_err());
+    }
+
+    #[test]
+    fn sign_and_verify_wrong_p_off_c() {
+        let mut rng = rand::thread_rng();
+        let sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+
+        let mut r = GenericArray::default();
+        rng.fill_bytes(&mut r);
+
+        let mut p_on = Pon::<FAEST128fParameters> {
+            inner: GenericArray::default(),
+        };
+        onizk_p_on(&sk, &r, &mut p_on).unwrap();
+
+        let pk = sk.as_public_key();
+        let mut p_off = onizk_p_off::<FAEST128fParameters>(&r);
+        p_off.c[0] ^= 1;
+        assert!(onizk_v::<FAEST128fParameters>(&pk, &p_off, &p_on).is_err());
     }
 
     #[test]
