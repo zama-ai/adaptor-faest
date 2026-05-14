@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use faest::faest_internal::{FAESTParameters, InstanceHidingOWF};
 
-use crate::{adaptor, instance_hiding};
+use crate::{instance_hiding, standard};
 
 pub trait AdaptorSignatureScheme {
     type SigParameters: FAESTParameters;
@@ -21,10 +21,10 @@ where
 {
     type SigParameters = P;
     type OnizkParameters = P;
-    type Witness = adaptor::Witness<P::OWF>;
-    type Instance = adaptor::Instance<P::OWF>;
-    type PreSignature = adaptor::AdaptorPreSigature<P>;
-    type Signature = adaptor::AdaptorSignature<P>;
+    type Witness = standard::Witness<P::OWF>;
+    type Instance = standard::Instance<P::OWF>;
+    type PreSignature = standard::AdaptorPreSigature<P>;
+    type Signature = standard::AdaptorSignature<P>;
 }
 
 impl<SigParameters, OnizkParameters> AdaptorSignatureScheme

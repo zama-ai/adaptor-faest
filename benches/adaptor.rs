@@ -1,4 +1,4 @@
-use adaptor_faest::{adaptor as standard_adaptor, instance_hiding as ih_adaptor};
+use adaptor_faest::{instance_hiding as ih_adaptor, standard as standard_adaptor};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use faest::faest_internal::{FAEST128fParameters, FAESTParameters, OWFParameters};
 use generic_array::typenum::Unsigned;
@@ -8,7 +8,7 @@ type O = <P as FAESTParameters>::OWF;
 
 const MSG: &[u8] = b"bench message";
 
-// Both `adaptor` and `instance_hiding` expose the same function/type names
+// Both `standard` and `instance_hiding` expose the same function/type names
 // (`as_keygen`, `as_pre_sign`, `Witness`, ...), so a single macro can emit the
 // bench group for either. `Witness::<O>` vs `Witness` is resolved by inference
 // through the downstream `as_pre_sign::<P, _>` call.
@@ -118,7 +118,7 @@ macro_rules! adaptor_bench_group {
 adaptor_bench_group!(
     bench_standard_adaptor,
     standard_adaptor,
-    "adaptor_faest128f"
+    "standard_adaptor_faest128f"
 );
 adaptor_bench_group!(
     bench_instance_hiding_adaptor,

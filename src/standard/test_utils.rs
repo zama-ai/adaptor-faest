@@ -4,7 +4,7 @@ use faest::{
 };
 use generic_array::typenum::Unsigned;
 
-use crate::adaptor::{
+use crate::standard::{
     Witness, as_adapt, as_ext, as_keygen, as_pre_sign, as_pre_ver, as_sign, as_ver,
 };
 

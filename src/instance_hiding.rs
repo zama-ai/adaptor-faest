@@ -368,7 +368,7 @@ pub mod test_utils {
     };
     use generic_array::typenum::Unsigned;
 
-    pub use crate::adaptor::test_utils::SignatureSizes;
+    pub use crate::standard::test_utils::SignatureSizes;
 
     use super::{
         DefaultOnizkParameters, Witness, as_adapt, as_ext, as_keygen, as_pre_sign, as_pre_ver,

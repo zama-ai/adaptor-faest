@@ -1,5 +1,5 @@
-use adaptor_faest::adaptor::test_utils::SignatureSizes;
-use adaptor_faest::{adaptor, instance_hiding};
+use adaptor_faest::standard::test_utils::SignatureSizes;
+use adaptor_faest::{instance_hiding, standard};
 use faest::faest_internal::FAEST128fParameters;
 
 fn print_report(name: &str, sizes: &SignatureSizes) {
@@ -21,7 +21,8 @@ fn print_report(name: &str, sizes: &SignatureSizes) {
 
 fn main() {
     let rng = &mut rand::thread_rng();
-    let standard = adaptor::test_utils::as_full_flow::<FAEST128fParameters, _>(rng, b"size report");
+    let standard =
+        standard::test_utils::as_full_flow::<FAEST128fParameters, _>(rng, b"size report");
     let ih =
         instance_hiding::test_utils::as_full_flow::<FAEST128fParameters, _>(rng, b"size report");
 

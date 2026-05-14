@@ -16,7 +16,7 @@ export RUSTFLAGS="-C target-cpu=native"
 
 OUT="${1:-bench-results.csv}"
 VARIANTS=("FAEST128f" "FAEST128f-instance-hiding")
-BENCH_GROUPS=("adaptor_faest128f" "instance_hiding_adaptor_faest128f")
+BENCH_GROUPS=("standard_adaptor_faest128f" "instance_hiding_adaptor_faest128f")
 SIZE_TITLES=("FAEST128f standard adaptor" "FAEST128f instance-hiding adaptor")
 
 SIZE_LOG=$(mktemp)
