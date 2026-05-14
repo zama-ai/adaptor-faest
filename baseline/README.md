@@ -74,3 +74,37 @@ python3 ../tools/bench_all.py   # benchmarks a wide range of parameters
 ./bench_free -i <iterations> <kappa=16> <Sboxes=200> <N> <tau> # benchmark parameters freely; note that (N, tau) should be chose to ensure soundness
 ```
 The benchmark script auto-detects the `SCALING_FACTOR` based on whether the Linux perf hardware cycle counter is available (`/proc/sys/kernel/perf_event_paranoid ≤ 2`), falling back to microseconds otherwise.
+
+## Adaptor Signature Benchmarks
+
+The `bench_adaptor` binary times all six adaptor operations (KeyGen, preSign, pVer, Adapt, Ver, Ext) and reports per-iteration timings in milliseconds along with signature sizes in bytes.
+
+Run from the `build/` directory:
+
+```bash
+./bench_adaptor -i <iterations> <param>
+```
+
+`<param>` selects the Helium instance:
+
+| param | N   | tau | note |
+|-------|-----|-----|------|
+| 1     | 16  | 31  | AES128_L1_Param1 |
+| 2     | 57  | 22  | AES128_L1_Param2 |
+| 3     | 256 | 16  | AES128_L1_Param3 (default for benchmarking) |
+
+Example (101 iterations, N=256/tau=16):
+
+```bash
+./bench_adaptor -i 101 3
+```
+
+Output is CSV with a header row, one row per iteration, and a trailing average over the last 100 rows (row 0 is a warmup and excluded from the average).
+
+To produce a LaTeX table row for the paper, run the Python wrapper from the `build/` directory:
+
+```bash
+python3 ../tools/bench_adaptor.py
+```
+
+This runs `bench_adaptor -i 101 3`, parses the output (skipping the warmup row), and prints a `\midrule`-delimited LaTeX row with columns: Scheme, |apk|, |ask|, |σ̃|, |σ|, KeyGen, preSign, pVer, Adapt, Ver, Ext (all times in ms).
