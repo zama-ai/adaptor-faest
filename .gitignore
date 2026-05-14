@@ -24,3 +24,12 @@ target
 # Added by cargo
 
 /target
+
+# baseline (helium_aes C++ project)
+baseline/build/
+baseline/**/*.o
+baseline/**/*.a
+baseline/bench_output.txt
+baseline/bench_adaptor_output.txt
+baseline/kyber-avx2/*.o
+baseline/kyber-avx2/*.a
