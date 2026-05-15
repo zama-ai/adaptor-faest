@@ -1,0 +1,3 @@
+[submodule "faest-arch-opt"]
+	path = baseline/faest-arch-opt
+	url = git@github.com:faest-sign/faest-arch-opt.git
