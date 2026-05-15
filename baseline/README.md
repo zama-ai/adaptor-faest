@@ -47,6 +47,13 @@ For testing and benchmarking:
 * [NTL](https://shoup.net/ntl)
 
 ## Setup
+
+`faest-arch-opt/` is a git submodule. After cloning, initialise it before building:
+
+```bash
+git submodule update --init
+```
+
 The project uses `cmake`. To build it:
 ```bash
 mkdir build
