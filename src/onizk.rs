@@ -7,12 +7,14 @@ use faest::faest_internal::{
     faest_volecommit_c_size,
 };
 use faest::signature::rand_core::CryptoRngCore;
-use generic_array::GenericArray;
+use generic_array::{GenericArray, typenum::Unsigned};
 
 pub(crate) struct Poff<P: FAESTParameters> {
     // FAEST v2 note: v1 stored the vector-commitment hcom here; v2's BAVC
     // VOLE path exposes both `com` and the public derandomization vector `c`.
     pub(crate) com: GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>,
+    // TODO move to GenericArray once faest-rs exposes the `Tau` typenum (or a
+    // `c_size` typenum alias) so the length can live at the type level.
     pub(crate) c: Vec<u8>,
 }
 
@@ -28,10 +30,21 @@ impl<P: FAESTParameters> Poff<P> {
 }
 
 pub(crate) struct Pon<P: FAESTParameters> {
-    pub(crate) inner: GenericArray<u8, P::SignatureSize>,
+    // TODO move to GenericArray<u8, SignatureSize - c_size> once faest-rs
+    // exposes the `Tau` typenum (or a stripped-signature-size alias).
+    pub(crate) inner: Vec<u8>,
+    _marker: std::marker::PhantomData<P>,
 }
 
 impl<P: FAESTParameters> Pon<P> {
+    pub(crate) fn new() -> Self {
+        let len = <P::SignatureSize as Unsigned>::USIZE - faest_volecommit_c_size::<P>();
+        Self {
+            inner: vec![0u8; len],
+            _marker: std::marker::PhantomData,
+        }
+    }
+
     pub(crate) fn size(&self) -> usize {
         self.inner.len()
     }
@@ -140,7 +153,11 @@ where
     // iv_pre and stores it in the signature before deriving the VOLE iv.
     let iv_pre = IV::default();
 
-    faest_sign_with_mu_and_r::<P>(&mu, r, &iv_pre, sk, &mut signature.inner)
+    let mut full = GenericArray::<u8, P::SignatureSize>::default();
+    faest_sign_with_mu_and_r::<P>(&mu, r, &iv_pre, sk, &mut full)?;
+    let c_size = faest_volecommit_c_size::<P>();
+    signature.inner.copy_from_slice(&full[c_size..]);
+    Ok(())
 }
 
 /// ONIZK.Pon variant that takes a precomputed extended witness instead of
@@ -161,7 +178,11 @@ where
     let mut mu = GenericArray::<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>::default();
     faest_hash_mu::<P>(&mut mu, pk.owf_input(), pk.owf_output(), &[]);
     let iv_pre = IV::default();
-    faest_sign_with_mu_and_r_and_witness::<P>(&mu, r, &iv_pre, pk, witness, &mut signature.inner)
+    let mut full = GenericArray::<u8, P::SignatureSize>::default();
+    faest_sign_with_mu_and_r_and_witness::<P>(&mu, r, &iv_pre, pk, witness, &mut full)?;
+    let c_size = faest_volecommit_c_size::<P>();
+    signature.inner.copy_from_slice(&full[c_size..]);
+    Ok(())
 }
 
 /// ONIZK.V(Y, \pi)
@@ -180,7 +201,26 @@ where
     // note that message is empty
     faest_hash_mu::<P>(&mut mu, pk.owf_input(), pk.owf_output(), &[]);
 
-    faest_verify_with_mu_and_vole_commitment::<P>(&mu, pk, &p_on.inner, &p_off.com, &p_off.c)
+    let full = reassemble_signature::<P>(&p_off.c, &p_on.inner);
+    faest_verify_with_mu_and_vole_commitment::<P>(&mu, pk, &full, &p_off.com, &p_off.c)
+}
+
+// Splice `cs` (from Poff.c) back onto a stripped Pon to recover the full FAEST
+// signature byte layout `cs || u_tilde || d || ...`.
+fn reassemble_signature<P: FAESTParameters>(
+    c: &[u8],
+    p_on_inner: &[u8],
+) -> GenericArray<u8, P::SignatureSize> {
+    let c_size = faest_volecommit_c_size::<P>();
+    debug_assert_eq!(c.len(), c_size);
+    debug_assert_eq!(
+        p_on_inner.len(),
+        <P::SignatureSize as Unsigned>::USIZE - c_size
+    );
+    let mut full = GenericArray::<u8, P::SignatureSize>::default();
+    full[..c_size].copy_from_slice(c);
+    full[c_size..].copy_from_slice(p_on_inner);
+    full
 }
 
 fn slice_d<P, O>(sigma: &GenericArray<u8, <P as FAESTParameters>::SignatureSize>) -> &[u8]
@@ -229,11 +269,13 @@ pub(crate) fn onizk_ewr<P: FAESTParameters>(
     // with the raw default IV used by v1.
     let mut iv = IV::default();
     faest_hash_iv::<P>(&mut iv);
-    let (_com, _c, u) = faest_volecommit_for_adaptor::<P>(r, &iv);
+    let (_com, c, u) = faest_volecommit_for_adaptor::<P>(r, &iv);
 
-    let sigma = &p_on.inner;
+    // `faest_signature_d` indexes into a full FAEST signature (offset
+    // cs_size + u_tilde_size). Reassemble cs from the locally re-derived `c`.
+    let sigma = reassemble_signature::<P>(&c, &p_on.inner);
     // this is the gamma from ONIZK
-    let d = slice_d::<P, P::OWF>(sigma);
+    let d = slice_d::<P, P::OWF>(&sigma);
 
     // compute \gamma \oplus u to extract the witness
     assert!(u.len() > d.len());
@@ -267,9 +309,7 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters> {
-            inner: GenericArray::default(),
-        };
+        let mut p_on = Pon::<FAEST128fParameters>::new();
         onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
         let pk = sk.as_public_key();
@@ -285,9 +325,7 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters> {
-            inner: GenericArray::default(),
-        };
+        let mut p_on = Pon::<FAEST128fParameters>::new();
         onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
         let p_off = onizk_p_off::<FAEST128fParameters>(&r);
@@ -304,9 +342,7 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters> {
-            inner: GenericArray::default(),
-        };
+        let mut p_on = Pon::<FAEST128fParameters>::new();
         onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
         let pk = sk.as_public_key();
@@ -323,9 +359,7 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters> {
-            inner: GenericArray::default(),
-        };
+        let mut p_on = Pon::<FAEST128fParameters>::new();
         onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
         let pk = sk.as_public_key();
@@ -342,9 +376,7 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters> {
-            inner: GenericArray::default(),
-        };
+        let mut p_on = Pon::<FAEST128fParameters>::new();
 
         // note that p_on contains the witness that we need to extract
         onizk_p_on(&sk, &r, &mut p_on).unwrap();
@@ -365,9 +397,7 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters> {
-            inner: GenericArray::default(),
-        };
+        let mut p_on = Pon::<FAEST128fParameters>::new();
         onizk_p_on(&sk, &r, &mut p_on).unwrap();
 
         // use a different r for extraction

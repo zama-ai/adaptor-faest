@@ -256,9 +256,7 @@ where
         instance_hiding_proving_key::<OnizkParameters::OWF>(&sk.y, &pre_sig.t0, &pre_sig.t1)?;
     let public_key = ONIZKPublicKey::from_public_key(proving_key.public_key);
 
-    let mut p_on = Pon::<OnizkParameters> {
-        inner: GenericArray::default(),
-    };
+    let mut p_on = Pon::<OnizkParameters>::new();
     onizk_p_on_with_witness::<OnizkParameters>(
         &public_key,
         &proving_key.witness,

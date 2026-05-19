@@ -186,9 +186,7 @@ where
 
     let p_off = onizk_p_off::<P>(r);
 
-    let mut p_on = Pon::<P> {
-        inner: GenericArray::default(),
-    };
+    let mut p_on = Pon::<P>::new();
     onizk_p_on(&sk.inner, r, &mut p_on)?;
 
     Ok(AdaptorSignature {
@@ -239,9 +237,7 @@ where
     rng.fill_bytes(&mut r);
     let p_off = onizk_p_off::<P>(&r);
 
-    let mut p_on = Pon::<P> {
-        inner: GenericArray::default(),
-    };
+    let mut p_on = Pon::<P>::new();
     onizk_p_on(&y, &r, &mut p_on)?;
 
     // sign Y || p_off || m
