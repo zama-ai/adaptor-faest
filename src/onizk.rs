@@ -2,9 +2,8 @@ use std::ops::Deref;
 
 use faest::faest_internal::{
     FAESTParameters, IV, OWFParameters, PublicKey, SecretKey, Witness, faest_hash_iv,
-    faest_hash_mu, faest_sign_with_mu_and_r, faest_sign_with_mu_and_r_and_witness,
-    faest_signature_d, faest_verify_with_mu_and_vole_commitment, faest_volecommit,
-    faest_volecommit_c_size,
+    faest_hash_mu, faest_sign_with_mu_and_vole_and_witness, faest_signature_d,
+    faest_verify_with_mu_and_vole_commitment, faest_volecommit, faest_volecommit_c_size,
 };
 use faest::signature::rand_core::CryptoRngCore;
 use generic_array::{GenericArray, typenum::Unsigned};
@@ -126,63 +125,56 @@ where
     Poff { com, c }
 }
 
-/// ONIZK.Pon(Y, y, r)
-/// Y: the statement, public parameters etc.
-/// y: the witness (secret key)
-/// r: what goes into VOLECommit
-///
-/// NOTE: one can use unpacked secret key to sign
-///
-/// returns: signature (\pi_{on})
-pub(crate) fn onizk_p_on<P>(
+/// ONIZK.prove(Y, y, r): combined Poff and Pon that share a single VOLE
+/// commitment. Thin wrapper that derives the pk + extended witness from `sk`
+/// and delegates; `onizk_prove_with_witness` is the single point of truth.
+pub(crate) fn onizk_prove<P>(
     sk: &ONIZKSecretKey<P::OWF>,
     r: &GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
-    signature: &mut Pon<P>,
-) -> Result<(), faest::Error>
+) -> Result<(Poff<P>, Pon<P>), faest::Error>
 where
     P: FAESTParameters,
 {
-    // FAEST v2 note: v1's BaseParams::LambdaBytesTimes2 matched the OWF
-    // alias; v2's adaptor hooks are typed directly on OWF::LambdaBytesTimes2.
-    let mut mu = GenericArray::<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>::default();
-
-    // note that message is empty
-    faest_hash_mu::<P>(&mut mu, sk.owf_input(), sk.owf_output(), &[]);
-
-    // FAEST v2 note: v1's adaptor hook accepted the VOLE iv; v2 accepts
-    // iv_pre and stores it in the signature before deriving the VOLE iv.
-    let iv_pre = IV::default();
-
-    let mut full = GenericArray::<u8, P::SignatureSize>::default();
-    faest_sign_with_mu_and_r::<P>(&mu, r, &iv_pre, sk, &mut full)?;
-    let c_size = faest_volecommit_c_size::<P>();
-    signature.inner.copy_from_slice(&full[c_size..]);
-    Ok(())
+    let pk = sk.as_public_key();
+    let witness = <P::OWF as OWFParameters>::witness(sk);
+    onizk_prove_with_witness::<P>(&pk, &witness, r)
 }
 
-/// ONIZK.Pon variant that takes a precomputed extended witness instead of
+/// `onizk_prove` variant that takes a precomputed extended witness instead of
 /// deriving it from `sk` via `OWFParameters::witness`.
 ///
 /// Used by the instance-hiding adaptor where the SHAKE preimage carries a
 /// signer-supplied `t1` that cannot be reproduced from a regular
 /// `SecretKey` alone.
-pub(crate) fn onizk_p_on_with_witness<P>(
+pub(crate) fn onizk_prove_with_witness<P>(
     pk: &ONIZKPublicKey<P::OWF>,
     witness: &Witness<P::OWF>,
     r: &GenericArray<u8, <P::OWF as OWFParameters>::LambdaBytes>,
-    signature: &mut Pon<P>,
-) -> Result<(), faest::Error>
+) -> Result<(Poff<P>, Pon<P>), faest::Error>
 where
     P: FAESTParameters,
 {
     let mut mu = GenericArray::<u8, <P::OWF as OWFParameters>::LambdaBytesTimes2>::default();
     faest_hash_mu::<P>(&mut mu, pk.owf_input(), pk.owf_output(), &[]);
+
     let iv_pre = IV::default();
-    let mut full = GenericArray::<u8, P::SignatureSize>::default();
-    faest_sign_with_mu_and_r_and_witness::<P>(&mu, r, &iv_pre, pk, witness, &mut full)?;
+    let mut iv = iv_pre;
+    faest_hash_iv::<P>(&mut iv);
+
     let c_size = faest_volecommit_c_size::<P>();
-    signature.inner.copy_from_slice(&full[c_size..]);
-    Ok(())
+    let mut full = GenericArray::<u8, P::SignatureSize>::default();
+    let vole = faest_volecommit::<P>(&mut full[..c_size], r, &iv);
+
+    let mut com = GenericArray::default();
+    com.copy_from_slice(vole.com.as_slice());
+
+    faest_sign_with_mu_and_vole_and_witness::<P>(&mu, &iv_pre, pk, witness, vole, &mut full)?;
+
+    let c = full[..c_size].to_vec();
+    let mut p_on = Pon::<P>::new();
+    p_on.inner.copy_from_slice(&full[c_size..]);
+
+    Ok((Poff { com, c }, p_on))
 }
 
 /// ONIZK.V(Y, \pi)
@@ -287,12 +279,10 @@ pub(crate) fn onizk_ewr<P: FAESTParameters>(
 
 #[cfg(test)]
 mod test {
-    use super::Pon;
-
     use generic_array::GenericArray;
     use rand::RngCore;
 
-    use crate::onizk::{onizk_ewr, onizk_keygen, onizk_p_off, onizk_p_on, onizk_v};
+    use crate::onizk::{onizk_ewr, onizk_keygen, onizk_p_off, onizk_prove, onizk_v};
     use faest::faest_internal::{FAEST128fParameters, FAESTParameters, OWFParameters};
 
     // properties to verify
@@ -309,11 +299,9 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters>::new();
-        onizk_p_on(&sk, &r, &mut p_on).unwrap();
+        let (p_off, p_on) = onizk_prove::<FAEST128fParameters>(&sk, &r).unwrap();
 
         let pk = sk.as_public_key();
-        let p_off = onizk_p_off::<FAEST128fParameters>(&r);
         onizk_v::<FAEST128fParameters>(&pk, &p_off, &p_on).unwrap();
     }
 
@@ -325,10 +313,8 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters>::new();
-        onizk_p_on(&sk, &r, &mut p_on).unwrap();
+        let (p_off, p_on) = onizk_prove::<FAEST128fParameters>(&sk, &r).unwrap();
 
-        let p_off = onizk_p_off::<FAEST128fParameters>(&r);
         let wrong_sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
         let wrong_pk = wrong_sk.as_public_key();
         assert!(onizk_v::<FAEST128fParameters>(&wrong_pk, &p_off, &p_on).is_err());
@@ -342,12 +328,13 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters>::new();
-        onizk_p_on(&sk, &r, &mut p_on).unwrap();
+        let (mut p_off, p_on) = onizk_prove::<FAEST128fParameters>(&sk, &r).unwrap();
+        // Replace com with a fresh-but-wrong com (the one paired with p_on is
+        // the only one that verifies). Using onizk_p_off here is fine since
+        // it computes against the same r and would normally match.
+        p_off.com[0] ^= 1;
 
         let pk = sk.as_public_key();
-        let mut p_off = onizk_p_off::<FAEST128fParameters>(&r);
-        p_off.com[0] ^= 1;
         assert!(onizk_v::<FAEST128fParameters>(&pk, &p_off, &p_on).is_err());
     }
 
@@ -359,12 +346,10 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters>::new();
-        onizk_p_on(&sk, &r, &mut p_on).unwrap();
+        let (mut p_off, p_on) = onizk_prove::<FAEST128fParameters>(&sk, &r).unwrap();
+        p_off.c[0] ^= 1;
 
         let pk = sk.as_public_key();
-        let mut p_off = onizk_p_off::<FAEST128fParameters>(&r);
-        p_off.c[0] ^= 1;
         assert!(onizk_v::<FAEST128fParameters>(&pk, &p_off, &p_on).is_err());
     }
 
@@ -376,14 +361,11 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters>::new();
-
-        // note that p_on contains the witness that we need to extract
-        onizk_p_on(&sk, &r, &mut p_on).unwrap();
+        // p_on carries the witness that onizk_ewr extracts.
+        let (_p_off, p_on) = onizk_prove::<FAEST128fParameters>(&sk, &r).unwrap();
 
         let witness = onizk_ewr(&r, &p_on);
 
-        // check that the extracted witness is expected
         let expected_witness =
             <<FAEST128fParameters as FAESTParameters>::OWF as OWFParameters>::witness(&sk);
         assert_eq!(witness.as_slice(), expected_witness.as_slice());
@@ -397,8 +379,7 @@ mod test {
         let mut r = GenericArray::default();
         rng.fill_bytes(&mut r);
 
-        let mut p_on = Pon::<FAEST128fParameters>::new();
-        onizk_p_on(&sk, &r, &mut p_on).unwrap();
+        let (_p_off, p_on) = onizk_prove::<FAEST128fParameters>(&sk, &r).unwrap();
 
         // use a different r for extraction
         let mut wrong_r = GenericArray::default();
@@ -409,5 +390,24 @@ mod test {
         let expected_witness =
             <<FAEST128fParameters as FAESTParameters>::OWF as OWFParameters>::witness(&sk);
         assert_ne!(witness.as_slice(), expected_witness.as_slice());
+    }
+
+    #[test]
+    fn onizk_prove_matches_p_off() {
+        // Sanity: the com/c that come out of onizk_prove must match what
+        // onizk_p_off would produce for the same r (since they go through the
+        // same VOLE commit). This is the property that lets as_pre_ver still
+        // use onizk_p_off while as_adapt/as_sign use onizk_prove.
+        let mut rng = rand::thread_rng();
+        let sk = onizk_keygen::<<FAEST128fParameters as FAESTParameters>::OWF, _>(&mut rng);
+
+        let mut r = GenericArray::default();
+        rng.fill_bytes(&mut r);
+
+        let (p_off_prove, _) = onizk_prove::<FAEST128fParameters>(&sk, &r).unwrap();
+        let p_off_alone = onizk_p_off::<FAEST128fParameters>(&r);
+
+        assert_eq!(p_off_prove.com.as_slice(), p_off_alone.com.as_slice());
+        assert_eq!(p_off_prove.c, p_off_alone.c);
     }
 }

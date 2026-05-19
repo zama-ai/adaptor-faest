@@ -295,7 +295,7 @@ checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 [[package]]
 name = "faest"
 version = "0.2.2"
-source = "git+https://github.com/kc1212/faest-rs.git?rev=15bb4de774959161c11534d67244f8da41506034#15bb4de774959161c11534d67244f8da41506034"
+source = "git+https://github.com/kc1212/faest-rs.git?rev=6d8ccb2c42de4b99b67fe8e14c448ff67f7ef836#6d8ccb2c42de4b99b67fe8e14c448ff67f7ef836"
 dependencies = [
  "aes",
  "bitvec",

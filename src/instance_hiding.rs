@@ -15,7 +15,7 @@ use generic_array::{
 };
 
 use crate::onizk::{
-    ONIZKPublicKey, Poff, Pon, onizk_ewr, onizk_p_off, onizk_p_on_with_witness, onizk_v,
+    ONIZKPublicKey, Poff, Pon, onizk_ewr, onizk_p_off, onizk_prove_with_witness, onizk_v,
 };
 
 pub type DefaultOnizkParameters = FAESTInstanceHidingRainHash128fParameters;
@@ -237,6 +237,35 @@ where
     as_adapt_with_onizk::<SigParameters, DefaultOnizkParameters>(sk, pre_sig, m)
 }
 
+// Build the instance-hiding public key plus the exact `(y, t0, t1)` extended
+// witness, and run the onizk proof. The signer-supplied `t1` cannot be
+// recovered from a regular `SecretKey`, so the witness-supplied prove path is
+// needed here. Shared by `as_adapt_with_onizk` and `as_sign_with_onizk`.
+#[expect(clippy::type_complexity)]
+fn instance_hiding_prove<OnizkParameters>(
+    y: &HidingMask,
+    t0: &HidingMask,
+    t1: &HidingMask,
+    r: &GenericArray<u8, <OnizkParameters::OWF as OWFParameters>::LambdaBytes>,
+) -> Result<
+    (
+        PublicKey<OnizkParameters::OWF>,
+        Poff<OnizkParameters>,
+        Pon<OnizkParameters>,
+    ),
+    faest::Error,
+>
+where
+    OnizkParameters: FAESTParameters,
+    OnizkParameters::OWF: InstanceHidingOWF,
+{
+    let proving_key = instance_hiding_proving_key::<OnizkParameters::OWF>(y, t0, t1)?;
+    let onizk_pk = ONIZKPublicKey::from_public_key(proving_key.public_key);
+    let (p_off, p_on) =
+        onizk_prove_with_witness::<OnizkParameters>(&onizk_pk, &proving_key.witness, r)?;
+    Ok((PublicKey::from(onizk_pk), p_off, p_on))
+}
+
 fn as_adapt_with_onizk<SigParameters, OnizkParameters>(
     sk: &Witness,
     pre_sig: &AdaptorPreSignature<SigParameters, OnizkParameters>,
@@ -247,25 +276,11 @@ where
     OnizkParameters: FAESTParameters,
     OnizkParameters::OWF: InstanceHidingOWF,
 {
-    let p_off = onizk_p_off::<OnizkParameters>(&pre_sig.r);
-    // Build the instance-hiding public key plus the exact `(y, t0, t1)`
-    // extended witness. The signer-supplied `t1` cannot be recovered from a
-    // regular `SecretKey`, so the ordinary `onizk_p_on` witness path is not
-    // usable here.
-    let proving_key =
-        instance_hiding_proving_key::<OnizkParameters::OWF>(&sk.y, &pre_sig.t0, &pre_sig.t1)?;
-    let public_key = ONIZKPublicKey::from_public_key(proving_key.public_key);
-
-    let mut p_on = Pon::<OnizkParameters>::new();
-    onizk_p_on_with_witness::<OnizkParameters>(
-        &public_key,
-        &proving_key.witness,
-        &pre_sig.r,
-        &mut p_on,
-    )?;
+    let (public_key, p_off, p_on) =
+        instance_hiding_prove::<OnizkParameters>(&sk.y, &pre_sig.t0, &pre_sig.t1, &pre_sig.r)?;
 
     Ok(AdaptorSignature {
-        public_key: PublicKey::from(public_key),
+        public_key,
         signature: pre_sig.signature.clone(),
         p_off,
         p_on,
@@ -325,11 +340,31 @@ where
     OnizkParameters::OWF: InstanceHidingOWF,
     R: CryptoRngCore,
 {
+    // Inline the pre_sign + adapt round-trip: routing through pre_sign would
+    // run `onizk_p_off(r)` and then `onizk_prove_with_witness(..., r)` against
+    // the same r, computing the same VOLE commitment twice.
     let witness = Witness::random(rng);
-    let instance = witness.instance();
-    let pre_sig =
-        as_pre_sign_with_onizk::<SigParameters, OnizkParameters, R>(sk, &instance, m, rng)?;
-    as_adapt_with_onizk::<SigParameters, OnizkParameters>(&witness, &pre_sig, m)
+
+    let mut r = GenericArray::<u8, <OnizkParameters::OWF as OWFParameters>::LambdaBytes>::default();
+    rng.fill_bytes(&mut r);
+    let mut t0 = HidingMask::default();
+    rng.fill_bytes(&mut t0);
+    let mut t1 = HidingMask::default();
+    rng.fill_bytes(&mut t1);
+
+    let (public_key, p_off, p_on) =
+        instance_hiding_prove::<OnizkParameters>(&witness.y, &t0, &t1, &r)?;
+
+    let msg = build_msg_for_signing::<OnizkParameters>(&public_key, &p_off, m);
+    let mut signature = GenericArray::<u8, SigParameters::SignatureSize>::default();
+    faest_sign::<SigParameters>(&msg, &sk.sk_regular, &[], &mut signature)?;
+
+    Ok(AdaptorSignature {
+        public_key,
+        signature,
+        p_off,
+        p_on,
+    })
 }
 
 pub fn as_ext<SigParameters>(

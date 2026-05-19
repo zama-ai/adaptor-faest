@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-faest = { git = "https://github.com/kc1212/faest-rs.git", rev = "15bb4de774959161c11534d67244f8da41506034" }
+faest = { git = "https://github.com/kc1212/faest-rs.git", rev = "6d8ccb2c42de4b99b67fe8e14c448ff67f7ef836" }
 generic-array = { version = "1", features = ["alloc"] }
 rand = { version = "0.8" }
 

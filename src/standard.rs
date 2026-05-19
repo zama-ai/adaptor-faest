@@ -9,7 +9,7 @@ use faest::{
 use generic_array::{GenericArray, typenum::Unsigned};
 
 use crate::onizk::{
-    ONIZKPublicKey, ONIZKSecretKey, Poff, Pon, onizk_ewr, onizk_keygen, onizk_p_off, onizk_p_on,
+    ONIZKPublicKey, ONIZKSecretKey, Poff, Pon, onizk_ewr, onizk_keygen, onizk_p_off, onizk_prove,
     onizk_v,
 };
 
@@ -184,10 +184,7 @@ where
     let r = &pre_sig.r;
     let signature = pre_sig.signature.clone(); // TODO avoid clone?
 
-    let p_off = onizk_p_off::<P>(r);
-
-    let mut p_on = Pon::<P>::new();
-    onizk_p_on(&sk.inner, r, &mut p_on)?;
+    let (p_off, p_on) = onizk_prove::<P>(&sk.inner, r)?;
 
     Ok(AdaptorSignature {
         public_key: sk.inner.as_public_key(),
@@ -232,13 +229,10 @@ where
     // create a new instance
     let y = onizk_keygen::<P::OWF, _>(rng);
 
-    // p_off and then p_on
+    // single VOLE commit produces both p_off and p_on
     let mut r = GenericArray::default();
     rng.fill_bytes(&mut r);
-    let p_off = onizk_p_off::<P>(&r);
-
-    let mut p_on = Pon::<P>::new();
-    onizk_p_on(&y, &r, &mut p_on)?;
+    let (p_off, p_on) = onizk_prove::<P>(&y, &r)?;
 
     // sign Y || p_off || m
     let y_pk = y.as_public_key();
