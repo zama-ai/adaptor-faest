@@ -38,3 +38,10 @@ cargo flamegraph --freq 200 --bench adaptor -- --bench <benchmark_name> --profil
 ```
 
 Where `<benchmark_name>` is one of the benchmarks, e.g., `standard_adaptor_faest128f/adapt`.
+
+## License
+
+This software is distributed under the BSD-3-Clause-Clear license.  This
+license applies to the entire repo except for subfolders that have their own
+license file. In such cases, the license file in the subfolder takes precedence.
+
