@@ -26,7 +26,7 @@ echo "[1/2] Running size report..."
 cargo run --release --quiet --bin report-signature-size 2>&1 | tee "$SIZE_LOG"
 
 echo
-echo "[2/2] Running benchmarks (this takes a few minutes)..."
+echo "[2/2] Running benchmarks..."
 cargo bench --quiet
 
 echo

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use adaptor_faest::{instance_hiding as ih_adaptor, standard as standard_adaptor};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use faest::faest_internal::{FAEST128fParameters, FAESTParameters, OWFParameters};
@@ -126,9 +128,16 @@ adaptor_bench_group!(
     "instance_hiding_adaptor_faest128f"
 );
 
+fn quick_criterion() -> Criterion {
+    Criterion::default()
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(2))
+}
+
 criterion_group!(
-    benches,
-    bench_standard_adaptor,
-    bench_instance_hiding_adaptor
+    name = benches;
+    config = quick_criterion();
+    targets = bench_standard_adaptor, bench_instance_hiding_adaptor
 );
 criterion_main!(benches);
