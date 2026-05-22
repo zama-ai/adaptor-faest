@@ -1,29 +1,13 @@
-# Verifiable Encryption of AES keys with Helium and Kyber 
+# Baseline Adaptor Signature for AES-128
+This folder includes an implementation of the [Ciampi et al.](https://eprint.iacr.org/2024/1773.pdf) adaptor signature construction, instantiated with FAEST-128f and the [Takahash-Zaverucha](https://eprint.iacr.org/2021/1704.pdf) verifiable encryption scheme. 
+The C++ implementation is based on [`faest-arch-opt`](https://github.com/faest-sign/faest-arch-opt) and [`verenc-mpcith`](https://github.com/akiratk0355/verenc-mpcith/tree/main/helium_aes). 
+The scheme essentially proceeds as follows:
 
-This repository contains the implementation of verifiable encryption (VE) from MPC-in-the-head, as described in our paper. 
-The basis for the implementation is the [Helium+AES](https://eprint.iacr.org/2022/588) signature scheme, which proves knowledge of an AES key associated with
-public plaintext-ciphertext pair. We apply our VE transform using a public-key encryption (PKE) 
-scheme based on [Kyber](https://www.pq-crystals.org/kyber/), therefore this implementation allows one to verifiably encrypt an AES key to a Kyber public key. 
+- The signer first generates a Kyber key pair, pre-signs the Kyber public-key with FAEST-128f together with a message and instance (AES-128 ciphertext), and outputs the FAEST-128f signature and the key generation seed for Kyber as a presigature. 
+- The party holding the corresponding witness (the AES-128 key) adapts the pre-signature into a complete signature, by running the verifiable encryption of the AES key under the Kyber public key derived from the seed.
+- To extract the witness from the pre-signature and the complete signature, one can run the Kyber decryption algorithm and reconstruct secret shares of the witness after verifying the proof. 
 
-It also includes an **adaptor signature** construction that composes FAEST 128f with Helium-AES into a six-algorithm scheme (KeyGen, preSign, pVer, Adapt, Ver, Ext).
-
-## Helium and Kyber implementations
-The implementation is based on the publicly available Helium code (https://github.com/IAIK/bnpp_helium_signatures).
-In many places the code *signature* refers to the proof in the context of verifiable encryption. (similarly for *sign* and *prove*)
-
-Kyber is the AVX2 version taken from [PQClean](https://github.com/PQClean/PQClean), along with some of the `common` code of
-PQClean (main was at `c1b19a865de329e87e9b3e9152362fcb709da8ab` (April 2023) when we took Kyber from PQClean).
-The Makefile is modified to build a static library that includes the `common' code from PQClean. 
-We added a deterministic version of kem_enc that allows the caller to pass the randomness used for encryption.
-We add a variant of KEM decapsulation that makes failures explicit, allowing the caller to check for
-decryption failures (see page 14 of the Kyber [spec](https://www.pq-crystals.org/kyber/data/kyber-specification-round3-20210804.pdf#page=14) for discussion).
-We also added `pke_keygen_seeded` — a deterministic variant of Kyber key generation that takes an explicit 64-byte seed, used by the adaptor signature scheme.
-
-## Adaptor Signature (`adaptor_signature.h` / `adaptor_signature.cpp`)
-
-The adaptor signature scheme binds a Helium-AES verifiable encryption key into a FAEST 128f signature, enabling a two-phase signing protocol where the full signature is only completable by a party that holds the corresponding AES key (the witness).
-
-The six algorithms are:
+In more detail, the scheme consists of the following six algorithms:
 
 | Algorithm | Description |
 |-----------|-------------|
