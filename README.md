@@ -1,6 +1,6 @@
 # adaptor-faest
 
-Adaptor signature based on FAEST v2.
+Adaptor signature based on FAEST v2, based on the paper "Practical Adaptor Signatures for NP from Online/Offline NIZK".
 
 
 ## Prerequisite
@@ -38,6 +38,10 @@ cargo flamegraph --freq 200 --bench adaptor -- --bench <benchmark_name> --profil
 ```
 
 Where `<benchmark_name>` is one of the benchmarks, e.g., `standard_adaptor_faest128f/adapt`.
+
+## Disclaimer
+
+This implementation is purely for academic purposes and not meant for production.
 
 ## License
 
