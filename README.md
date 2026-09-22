@@ -1,7 +1,10 @@
 # adaptor-faest
 
-Adaptor signature based on FAEST v2, based on the paper "Practical Adaptor Signatures for NP from Online/Offline NIZK".
+This repo contains the implementation of a post-quantum adaptor signature scheme,
+based on the paper "[Practical Adaptor Signatures for NP from Online/Offline NIZK](https://eprint.iacr.org/2026/2155.pdf)".
 
+The root directory contains the main implementation and the benchmark code, see below for instructions and more details can be found in the paper.
+The `baseline` directory contains the C/C++ implementation of the baseline, see [baseline/README.md](./baseline/README.md) for instructions.
 
 ## Prerequisite
 
@@ -48,4 +51,3 @@ This implementation is purely for academic purposes and not meant for production
 This software is distributed under the BSD-3-Clause-Clear license.  This
 license applies to the entire repo except for subfolders that have their own
 license file. In such cases, the license file in the subfolder takes precedence.
-
